@@ -148,6 +148,14 @@ footer{max-width:680px;margin:18px auto 0;padding:0 16px;font-size:9.5px;color:v
     <label for="atrM">Supertrend — Multiplier</label>
     <input id="atrM" type="number" value="3" min="0.5" max="10" step="0.1">
 
+    <label for="alerts">Flip alerts (sound + vibration)</label>
+    <select id="alerts">
+      <option value="1" selected>On</option>
+      <option value="0">Off</option>
+    </select>
+    <div class="hint">Jab kisi pair ka signal BUY&harr;SELL flip hota hai, beep + vibrate + notification milega. <b style="color:var(--gold)">Note:</b> app khula hona chahiye ya auto-refresh chal raha ho — background push free API route mein possible nahi.</div>
+    <button class="btn ghost" id="btnTest" style="margin-top:10px;width:100%">&#128276; Test alert</button>
+
     <div class="sheetbtns">
       <button class="btn ghost" id="btnClose">Cancel</button>
       <button class="btn" id="btnSave">Save &amp; scan</button>
@@ -169,9 +177,42 @@ let cfg = {
   interval: store.get('sd_interval','1h'),
   refresh:  store.get('sd_refresh',300),
   atrP: store.get('sd_atrp',10),
-  atrM: store.get('sd_atrm',3)
+  atrM: store.get('sd_atrm',3),
+  alerts: store.get('sd_alerts',1)
 };
 let timer = null, scanning = false;
+let lastDirs = store.get('sd_dirs',{});   // {sym: 1|-1} last known direction
+
+/* ================= alert engine ================= */
+function beep(){
+  try{
+    const ctx = new (window.AudioContext||window.webkitAudioContext)();
+    const t = ctx.currentTime;
+    [[880,0],[1320,0.18]].forEach(([f,off])=>{
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.type='sine'; o.frequency.value=f;
+      g.gain.setValueAtTime(0.001,t+off);
+      g.gain.exponentialRampToValueAtTime(0.4,t+off+0.02);
+      g.gain.exponentialRampToValueAtTime(0.001,t+off+0.16);
+      o.connect(g); g.connect(ctx.destination);
+      o.start(t+off); o.stop(t+off+0.2);
+    });
+  }catch(e){}
+}
+function fireAlert(flips){
+  if(!+cfg.alerts || !flips.length) return;
+  beep();
+  if(navigator.vibrate) navigator.vibrate([200,100,200,100,400]);
+  if('Notification' in window && Notification.permission==='granted'){
+    const body = flips.map(f=>`${f.sym} → ${f.dir===1?'BUY ▲':'SELL ▼'}`).join('\n');
+    try{ new Notification('SignalDesk — Signal flip!', { body, icon:'./icon-192.png', tag:'sd-flip' }); }catch(e){}
+  }
+}
+function askNotifPermission(){
+  if('Notification' in window && Notification.permission==='default'){
+    Notification.requestPermission();
+  }
+}
 
 /* ================= supertrend ================= */
 function supertrend(bars, period, mult){
@@ -275,18 +316,26 @@ async function scan(){
   skeletons(cfg.pairs.length);
 
   const results = [];
+  const flips = [];
   let errors = 0;
   for(const sym of cfg.pairs){
     try{
       const bars = await fetchPair(sym);
       const res = supertrend(bars, +cfg.atrP, +cfg.atrM);
       results.push({sym, res});
+      if(res){
+        const prev = lastDirs[sym];
+        if(prev !== undefined && prev !== res.dir) flips.push({sym, dir:res.dir});
+        lastDirs[sym] = res.dir;
+      }
     }catch(e){
       errors++;
       results.push({sym, err: String(e.message||e).slice(0,80)});
     }
     await new Promise(r=>setTimeout(r, 400)); // stay under 8 req/min bursts
   }
+  store.set('sd_dirs', lastDirs);
+  fireAlert(flips);
   // sort: fresh flips first, then buys, then sells
   results.sort((a,b)=>{
     const fa=a.res? (a.res.flipAgo<=1?0:1):2, fb=b.res?(b.res.flipAgo<=1?0:1):2;
@@ -321,6 +370,7 @@ function openSettings(){
   document.getElementById('refresh').value = String(cfg.refresh);
   document.getElementById('atrP').value = cfg.atrP;
   document.getElementById('atrM').value = cfg.atrM;
+  document.getElementById('alerts').value = String(+cfg.alerts);
   overlay.classList.add('open');
 }
 function closeSettings(){ overlay.classList.remove('open'); }
@@ -331,6 +381,18 @@ document.getElementById('btnClose').onclick = closeSettings;
 overlay.addEventListener('click', e=>{ if(e.target===overlay) closeSettings(); });
 document.getElementById('btnRefresh').onclick = scan;
 
+document.getElementById('btnTest').onclick = ()=>{
+  askNotifPermission();
+  fireAlertTest();
+};
+function fireAlertTest(){
+  beep();
+  if(navigator.vibrate) navigator.vibrate([200,100,200]);
+  if('Notification' in window && Notification.permission==='granted'){
+    try{ new Notification('SignalDesk — Test alert', { body:'XAU/USD → BUY ▲ (sample)', icon:'./icon-192.png' }); }catch(e){}
+  }
+}
+
 document.getElementById('btnSave').onclick = ()=>{
   cfg.key = document.getElementById('apiKey').value.trim();
   cfg.pairs = document.getElementById('pairs').value.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean).slice(0,8);
@@ -338,9 +400,12 @@ document.getElementById('btnSave').onclick = ()=>{
   cfg.refresh = +document.getElementById('refresh').value;
   cfg.atrP = Math.max(2, +document.getElementById('atrP').value||10);
   cfg.atrM = Math.max(0.5, +document.getElementById('atrM').value||3);
+  cfg.alerts = +document.getElementById('alerts').value;
+  if(cfg.alerts) askNotifPermission();
   store.set('sd_key',cfg.key); store.set('sd_pairs',cfg.pairs);
   store.set('sd_interval',cfg.interval); store.set('sd_refresh',cfg.refresh);
   store.set('sd_atrp',cfg.atrP); store.set('sd_atrm',cfg.atrM);
+  store.set('sd_alerts',cfg.alerts);
   closeSettings();
   schedule();
   scan();
