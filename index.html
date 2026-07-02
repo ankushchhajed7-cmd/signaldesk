@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#0D0F14">
+<title>SignalDesk — Live Supertrend Scanner</title>
+<link rel="manifest" href="./manifest.json">
+<link rel="icon" href="./icon-192.png">
+<link rel="apple-touch-icon" href="./icon-192.png">
+<style>
+:root{
+  --bg:#0D0F14; --surface:#151922; --surface2:#1C2230; --line:#262E40;
+  --gold:#F5C542; --buy:#2ECC71; --sell:#E74C3C; --text:#E8ECF4; --muted:#8A93A6;
+  --mono:ui-monospace,'Cascadia Code','JetBrains Mono',Consolas,Menlo,monospace;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{background:var(--bg);color:var(--text);font-family:var(--mono);min-height:100vh;padding-bottom:40px}
+/* ---------- header ---------- */
+header{position:sticky;top:0;z-index:10;background:rgba(13,15,20,.92);backdrop-filter:blur(8px);
+  border-bottom:1px solid var(--line);padding:14px 16px calc(14px);padding-top:calc(14px + env(safe-area-inset-top));
+  display:flex;align-items:center;gap:10px}
+.logo{width:30px;height:30px;border-radius:7px;background:linear-gradient(135deg,#F5C542,#C79A1F);
+  display:flex;align-items:center;justify-content:center;font-weight:800;color:#14161C;font-size:15px;flex-shrink:0}
+h1{font-size:15px;letter-spacing:.5px;font-weight:700}
+h1 span{color:var(--gold)}
+.sub{font-size:10px;color:var(--muted);letter-spacing:.4px;margin-top:1px}
+.hbtns{margin-left:auto;display:flex;gap:8px}
+.icobtn{width:36px;height:36px;border-radius:8px;border:1px solid var(--line);background:var(--surface);
+  color:var(--text);font-size:16px;display:flex;align-items:center;justify-content:center;cursor:pointer}
+.icobtn:active{background:var(--surface2)}
+.icobtn:focus-visible,.btn:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+/* ---------- status bar ---------- */
+.statusbar{display:flex;align-items:center;gap:8px;padding:10px 16px;font-size:11px;color:var(--muted);
+  border-bottom:1px solid var(--line)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex-shrink:0}
+.dot.live{background:var(--buy);animation:pulse 1.6s ease-in-out infinite}
+.dot.err{background:var(--sell)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+@media (prefers-reduced-motion:reduce){.dot.live{animation:none}}
+.statusbar .tf{margin-left:auto;color:var(--gold);font-weight:700}
+/* ---------- cards ---------- */
+main{padding:14px 12px;display:grid;gap:10px;grid-template-columns:1fr;max-width:680px;margin:0 auto}
+@media(min-width:560px){main{grid-template-columns:1fr 1fr}}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px;position:relative;overflow:hidden}
+.card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--muted)}
+.card.buy::before{background:var(--buy)}
+.card.sell::before{background:var(--sell)}
+.rowtop{display:flex;align-items:baseline;gap:8px}
+.pair{font-size:16px;font-weight:800;letter-spacing:.5px}
+.newbadge{font-size:9px;font-weight:800;color:#14161C;background:var(--gold);border-radius:4px;padding:2px 6px;letter-spacing:.5px}
+.sig{margin-left:auto;font-size:13px;font-weight:800;letter-spacing:1px;padding:3px 10px;border-radius:6px}
+.sig.buy{color:var(--buy);background:rgba(46,204,113,.12)}
+.sig.sell{color:var(--sell);background:rgba(231,76,60,.12)}
+.price{font-size:22px;font-weight:700;margin:8px 0 2px;font-variant-numeric:tabular-nums}
+.meta{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:10.5px;color:var(--muted);margin-top:8px}
+.meta b{color:var(--text);font-weight:600}
+.skel{height:96px;border-radius:12px;background:linear-gradient(90deg,var(--surface),var(--surface2),var(--surface));
+  background-size:200% 100%;animation:sh 1.2s linear infinite}
+@keyframes sh{to{background-position:-200% 0}}
+/* ---------- empty / setup ---------- */
+.setup{max-width:680px;margin:40px auto;padding:0 20px;text-align:center;color:var(--muted);font-size:13px;line-height:1.7}
+.setup .big{font-size:34px;margin-bottom:10px}
+.btn{display:inline-block;margin-top:14px;background:var(--gold);color:#14161C;font-weight:800;font-family:var(--mono);
+  border:none;border-radius:8px;padding:11px 22px;font-size:13px;letter-spacing:.5px;cursor:pointer}
+.btn:active{filter:brightness(.9)}
+/* ---------- settings modal ---------- */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:20;display:none;align-items:flex-end;justify-content:center}
+.overlay.open{display:flex}
+.sheet{background:var(--surface);border:1px solid var(--line);border-bottom:none;border-radius:16px 16px 0 0;
+  width:100%;max-width:680px;padding:20px 18px calc(24px + env(safe-area-inset-bottom));max-height:86vh;overflow-y:auto}
+.sheet h2{font-size:14px;color:var(--gold);letter-spacing:.5px;margin-bottom:16px}
+label{display:block;font-size:11px;color:var(--muted);margin:14px 0 5px;letter-spacing:.4px}
+input,select,textarea{width:100%;background:var(--bg);border:1px solid var(--line);border-radius:8px;color:var(--text);
+  font-family:var(--mono);font-size:13px;padding:10px 12px}
+textarea{resize:vertical;min-height:64px}
+.hint{font-size:10px;color:var(--muted);margin-top:5px;line-height:1.5}
+.hint a{color:var(--gold)}
+.sheetbtns{display:flex;gap:10px;margin-top:20px}
+.btn.ghost{background:transparent;color:var(--muted);border:1px solid var(--line)}
+footer{max-width:680px;margin:18px auto 0;padding:0 16px;font-size:9.5px;color:var(--muted);line-height:1.6;text-align:center}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">S</div>
+  <div>
+    <h1>SIGNAL<span>DESK</span></h1>
+    <div class="sub">SUPERTREND SCANNER · TWELVEDATA</div>
+  </div>
+  <div class="hbtns">
+    <button class="icobtn" id="btnRefresh" title="Refresh signals" aria-label="Refresh signals">&#8635;</button>
+    <button class="icobtn" id="btnSettings" title="Settings" aria-label="Settings">&#9881;</button>
+  </div>
+</header>
+
+<div class="statusbar">
+  <div class="dot" id="dot"></div>
+  <span id="statusText">Waiting for setup…</span>
+  <span class="tf" id="tfLabel"></span>
+</div>
+
+<main id="grid"></main>
+
+<div class="setup" id="setup" hidden>
+  <div class="big">&#128225;</div>
+  <div><b style="color:var(--text)">API key set karo, signals shuru.</b><br>
+  TwelveData ka free account banao, API key copy karo, aur Settings (&#9881;) mein paste karo.</div>
+  <button class="btn" id="btnSetup">Open settings</button>
+</div>
+
+<footer>Signals Supertrend (ATR based) se calculate hote hain — educational tool hai, trade decision aapki. Free API delay ho sakta hai; execution se pehle MT5 pe confirm karo.</footer>
+
+<!-- Settings sheet -->
+<div class="overlay" id="overlay" role="dialog" aria-modal="true" aria-label="Settings">
+  <div class="sheet">
+    <h2>&#9881; SETTINGS</h2>
+
+    <label for="apiKey">TwelveData API key</label>
+    <input id="apiKey" type="text" placeholder="e.g. 1a2b3c4d5e..." autocomplete="off">
+    <div class="hint">Free key: <a href="https://twelvedata.com/pricing" target="_blank" rel="noopener">twelvedata.com</a> pe signup &rarr; Dashboard &rarr; API key. 800 calls/day free.</div>
+
+    <label for="pairs">Pairs (comma separated)</label>
+    <textarea id="pairs">XAU/USD, EUR/USD, GBP/USD, USD/JPY, AUD/USD, USD/CAD</textarea>
+    <div class="hint">Max 8 pairs rakho — free plan limit 8 calls/minute hai.</div>
+
+    <label for="interval">Timeframe</label>
+    <select id="interval">
+      <option value="15min">M15</option>
+      <option value="1h" selected>H1</option>
+      <option value="4h">H4</option>
+      <option value="1day">D1</option>
+    </select>
+
+    <label for="refresh">Auto refresh</label>
+    <select id="refresh">
+      <option value="0">Manual only</option>
+      <option value="300" selected>Every 5 min</option>
+      <option value="900">Every 15 min</option>
+      <option value="3600">Every 1 hour</option>
+    </select>
+    <div class="hint">5 min × 6 pairs &asymp; 432 calls/day — free limit (800) ke andar.</div>
+
+    <label for="atrP">Supertrend — ATR period</label>
+    <input id="atrP" type="number" value="10" min="2" max="50">
+    <label for="atrM">Supertrend — Multiplier</label>
+    <input id="atrM" type="number" value="3" min="0.5" max="10" step="0.1">
+
+    <div class="sheetbtns">
+      <button class="btn ghost" id="btnClose">Cancel</button>
+      <button class="btn" id="btnSave">Save &amp; scan</button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ================= storage (safe) ================= */
+const store = {
+  get(k,d){ try{ const v = localStorage.getItem(k); return v===null?d:JSON.parse(v);}catch(e){return this.mem?.[k] ?? d;} },
+  set(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)); }catch(e){ (this.mem=this.mem||{})[k]=v; } }
+};
+
+/* ================= state ================= */
+let cfg = {
+  key:   store.get('sd_key',''),
+  pairs: store.get('sd_pairs',['XAU/USD','EUR/USD','GBP/USD','USD/JPY','AUD/USD','USD/CAD']),
+  interval: store.get('sd_interval','1h'),
+  refresh:  store.get('sd_refresh',300),
+  atrP: store.get('sd_atrp',10),
+  atrM: store.get('sd_atrm',3)
+};
+let timer = null, scanning = false;
+
+/* ================= supertrend ================= */
+function supertrend(bars, period, mult){
+  // bars: oldest -> newest, {h,l,c}
+  const n = bars.length;
+  if(n < period + 3) return null;
+  const tr = new Array(n).fill(0), atr = new Array(n).fill(0);
+  for(let i=1;i<n;i++){
+    const b=bars[i], p=bars[i-1];
+    tr[i]=Math.max(b.h-b.l, Math.abs(b.h-p.c), Math.abs(b.l-p.c));
+  }
+  // Wilder smoothing (MT5-style)
+  let s=0; for(let i=1;i<=period;i++) s+=tr[i];
+  atr[period]=s/period;
+  for(let i=period+1;i<n;i++) atr[i]=(atr[i-1]*(period-1)+tr[i])/period;
+
+  const up=new Array(n), dn=new Array(n), dir=new Array(n);
+  for(let i=period;i<n;i++){
+    const mid=(bars[i].h+bars[i].l)/2;
+    let bu=mid+mult*atr[i], bl=mid-mult*atr[i];
+    if(i>period){
+      up[i]=(bu<up[i-1] || bars[i-1].c>up[i-1]) ? bu : up[i-1];
+      dn[i]=(bl>dn[i-1] || bars[i-1].c<dn[i-1]) ? bl : dn[i-1];
+      dir[i]= bars[i].c>up[i-1] ? 1 : bars[i].c<dn[i-1] ? -1 : dir[i-1];
+    } else { up[i]=bu; dn[i]=bl; dir[i]=1; }
+  }
+  // bars since last flip
+  let flipAgo=0;
+  for(let i=n-1;i>period;i--){ if(dir[i]!==dir[i-1]) break; flipAgo++; }
+  const last=n-1;
+  return { dir:dir[last], line: dir[last]===1 ? dn[last] : up[last], flipAgo, close:bars[last].c };
+}
+
+/* ================= api ================= */
+async function fetchPair(sym){
+  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(sym)}&interval=${cfg.interval}&outputsize=120&apikey=${encodeURIComponent(cfg.key)}`;
+  const r = await fetch(url);
+  const j = await r.json();
+  if(j.status==='error') throw new Error(j.message || 'API error');
+  if(!j.values) throw new Error('No data');
+  const bars = j.values.slice().reverse().map(v=>({h:+v.high, l:+v.low, c:+v.close}));
+  return bars;
+}
+
+/* ================= render ================= */
+const grid = document.getElementById('grid');
+const setupBox = document.getElementById('setup');
+const dot = document.getElementById('dot');
+const statusText = document.getElementById('statusText');
+const tfLabel = document.getElementById('tfLabel');
+
+function fmt(p, sym){
+  const d = sym.includes('JPY') ? 3 : sym.includes('XAU') ? 2 : 5;
+  return p.toFixed(d);
+}
+function tfName(v){ return {'15min':'M15','1h':'H1','4h':'H4','1day':'D1'}[v]||v; }
+
+function skeletons(n){
+  grid.innerHTML='';
+  for(let i=0;i<n;i++){ const d=document.createElement('div'); d.className='skel'; grid.appendChild(d); }
+}
+
+function renderCard(sym, res, err){
+  const el = document.createElement('div');
+  if(err){
+    el.className='card';
+    el.innerHTML = `<div class="rowtop"><div class="pair">${sym}</div>
+      <div class="sig" style="color:var(--muted)">—</div></div>
+      <div class="meta" style="margin-top:10px"><span style="color:var(--sell)">${err}</span></div>`;
+    return el;
+  }
+  const isBuy = res.dir===1;
+  el.className = 'card ' + (isBuy?'buy':'sell');
+  const fresh = res.flipAgo <= 1;
+  const dist = Math.abs(res.close - res.line);
+  const distPct = (dist/res.close*100).toFixed(2);
+  el.innerHTML = `
+    <div class="rowtop">
+      <div class="pair">${sym}</div>
+      ${fresh?'<span class="newbadge">NEW FLIP</span>':''}
+      <div class="sig ${isBuy?'buy':'sell'}">${isBuy?'&#9650; BUY':'&#9660; SELL'}</div>
+    </div>
+    <div class="price">${fmt(res.close,sym)}</div>
+    <div class="meta">
+      <span>ST line <b>${fmt(res.line,sym)}</b></span>
+      <span>Dist <b>${distPct}%</b></span>
+      <span>Flip <b>${res.flipAgo} bar${res.flipAgo===1?'':'s'} ago</b></span>
+    </div>`;
+  return el;
+}
+
+/* ================= scan ================= */
+async function scan(){
+  if(scanning) return;
+  if(!cfg.key){ showSetup(true); return; }
+  scanning = true;
+  showSetup(false);
+  dot.className='dot live';
+  statusText.textContent='Scanning '+cfg.pairs.length+' pairs…';
+  tfLabel.textContent = tfName(cfg.interval)+' · ATR'+cfg.atrP+'×'+cfg.atrM;
+  skeletons(cfg.pairs.length);
+
+  const results = [];
+  let errors = 0;
+  for(const sym of cfg.pairs){
+    try{
+      const bars = await fetchPair(sym);
+      const res = supertrend(bars, +cfg.atrP, +cfg.atrM);
+      results.push({sym, res});
+    }catch(e){
+      errors++;
+      results.push({sym, err: String(e.message||e).slice(0,80)});
+    }
+    await new Promise(r=>setTimeout(r, 400)); // stay under 8 req/min bursts
+  }
+  // sort: fresh flips first, then buys, then sells
+  results.sort((a,b)=>{
+    const fa=a.res? (a.res.flipAgo<=1?0:1):2, fb=b.res?(b.res.flipAgo<=1?0:1):2;
+    return fa-fb;
+  });
+  grid.innerHTML='';
+  results.forEach(x=> grid.appendChild(renderCard(x.sym, x.res, x.err)));
+
+  const now = new Date();
+  dot.className = errors===results.length ? 'dot err' : 'dot live';
+  statusText.textContent = 'Updated ' + now.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) +
+    (errors? ` · ${errors} error${errors>1?'s':''}` : '');
+  scanning = false;
+}
+
+function showSetup(v){
+  setupBox.hidden = !v;
+  if(v){ grid.innerHTML=''; statusText.textContent='Waiting for setup…'; dot.className='dot'; }
+}
+
+function schedule(){
+  if(timer) clearInterval(timer);
+  if(+cfg.refresh > 0) timer = setInterval(scan, +cfg.refresh*1000);
+}
+
+/* ================= settings ui ================= */
+const overlay = document.getElementById('overlay');
+function openSettings(){
+  document.getElementById('apiKey').value = cfg.key;
+  document.getElementById('pairs').value = cfg.pairs.join(', ');
+  document.getElementById('interval').value = cfg.interval;
+  document.getElementById('refresh').value = String(cfg.refresh);
+  document.getElementById('atrP').value = cfg.atrP;
+  document.getElementById('atrM').value = cfg.atrM;
+  overlay.classList.add('open');
+}
+function closeSettings(){ overlay.classList.remove('open'); }
+
+document.getElementById('btnSettings').onclick = openSettings;
+document.getElementById('btnSetup').onclick = openSettings;
+document.getElementById('btnClose').onclick = closeSettings;
+overlay.addEventListener('click', e=>{ if(e.target===overlay) closeSettings(); });
+document.getElementById('btnRefresh').onclick = scan;
+
+document.getElementById('btnSave').onclick = ()=>{
+  cfg.key = document.getElementById('apiKey').value.trim();
+  cfg.pairs = document.getElementById('pairs').value.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean).slice(0,8);
+  cfg.interval = document.getElementById('interval').value;
+  cfg.refresh = +document.getElementById('refresh').value;
+  cfg.atrP = Math.max(2, +document.getElementById('atrP').value||10);
+  cfg.atrM = Math.max(0.5, +document.getElementById('atrM').value||3);
+  store.set('sd_key',cfg.key); store.set('sd_pairs',cfg.pairs);
+  store.set('sd_interval',cfg.interval); store.set('sd_refresh',cfg.refresh);
+  store.set('sd_atrp',cfg.atrP); store.set('sd_atrm',cfg.atrM);
+  closeSettings();
+  schedule();
+  scan();
+};
+
+/* ================= boot ================= */
+if('serviceWorker' in navigator){
+  window.addEventListener('load', ()=> navigator.serviceWorker.register('./sw.js').catch(()=>{}));
+}
+if(cfg.key){ scan(); schedule(); } else { showSetup(true); }
+document.addEventListener('visibilitychange', ()=>{ if(!document.hidden && cfg.key && +cfg.refresh>0) scan(); });
+</script>
+</body>
+</html>
