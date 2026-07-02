@@ -56,6 +56,11 @@ main{padding:14px 12px;display:grid;gap:10px;grid-template-columns:1fr;max-width
 .price{font-size:22px;font-weight:700;margin:8px 0 2px;font-variant-numeric:tabular-nums}
 .meta{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:10.5px;color:var(--muted);margin-top:8px}
 .meta b{color:var(--text);font-weight:600}
+.lvls{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;margin-top:8px;
+  background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.lvls div{display:flex;flex-direction:column;gap:2px}
+.lvls span{font-size:9px;color:var(--muted);letter-spacing:.6px}
+.lvls b{font-size:12.5px;font-weight:700;font-variant-numeric:tabular-nums}
 .skel{height:96px;border-radius:12px;background:linear-gradient(90deg,var(--surface),var(--surface2),var(--surface));
   background-size:200% 100%;animation:sh 1.2s linear infinite}
 @keyframes sh{to{background-position:-200% 0}}
@@ -148,6 +153,16 @@ footer{max-width:680px;margin:18px auto 0;padding:0 16px;font-size:9.5px;color:v
     <label for="atrM">Supertrend — Multiplier</label>
     <input id="atrM" type="number" value="3" min="0.5" max="10" step="0.1">
 
+    <label for="rr">TP size (SL distance ke multiple mein)</label>
+    <select id="rr">
+      <option value="0.25">0.25&times; — chhota TP, bada SL (high win-rate style)</option>
+      <option value="0.5">0.5&times;</option>
+      <option value="1">1&times; — TP = SL</option>
+      <option value="1.5" selected>1.5&times; — recommended</option>
+      <option value="2">2&times;</option>
+    </select>
+    <div class="hint">SL hamesha Supertrend line pe hota hai (logical stop). 0.25&times; = aapka $1 TP / $4 SL style — dhyan rahe isme ~80%+ win rate chahiye break-even ke liye.</div>
+
     <label for="alerts">Flip alerts (sound + vibration)</label>
     <select id="alerts">
       <option value="1" selected>On</option>
@@ -178,6 +193,7 @@ let cfg = {
   refresh:  store.get('sd_refresh',300),
   atrP: store.get('sd_atrp',10),
   atrM: store.get('sd_atrm',3),
+  rr: store.get('sd_rr',1.5),
   alerts: store.get('sd_alerts',1)
 };
 let timer = null, scanning = false;
@@ -215,6 +231,13 @@ function askNotifPermission(){
 }
 
 /* ================= supertrend ================= */
+function emaLast(closes, period){
+  if(closes.length < period) return null;
+  const k = 2/(period+1);
+  let e = closes.slice(0,period).reduce((a,b)=>a+b,0)/period;
+  for(let i=period;i<closes.length;i++) e = closes[i]*k + e*(1-k);
+  return e;
+}
 function supertrend(bars, period, mult){
   // bars: oldest -> newest, {h,l,c}
   const n = bars.length;
@@ -243,12 +266,18 @@ function supertrend(bars, period, mult){
   let flipAgo=0;
   for(let i=n-1;i>period;i--){ if(dir[i]!==dir[i-1]) break; flipAgo++; }
   const last=n-1;
-  return { dir:dir[last], line: dir[last]===1 ? dn[last] : up[last], flipAgo, close:bars[last].c };
+  // average ATR of recent bars for volatility comparison
+  let sumA=0,cA=0;
+  for(let i=Math.max(period+1,n-50);i<n;i++){ sumA+=atr[i]; cA++; }
+  // long EMA for higher-level trend confirmation (200, fallback 100)
+  const closes = bars.map(b=>b.c);
+  const ema = emaLast(closes,200) ?? emaLast(closes,100);
+  return { dir:dir[last], line: dir[last]===1 ? dn[last] : up[last], flipAgo, close:bars[last].c, atr:atr[last], avgAtr:cA?sumA/cA:atr[last], ema };
 }
 
 /* ================= api ================= */
 async function fetchPair(sym){
-  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(sym)}&interval=${cfg.interval}&outputsize=120&apikey=${encodeURIComponent(cfg.key)}`;
+  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(sym)}&interval=${cfg.interval}&outputsize=320&apikey=${encodeURIComponent(cfg.key)}`;
   const r = await fetch(url);
   const j = await r.json();
   if(j.status==='error') throw new Error(j.message || 'API error');
@@ -287,27 +316,75 @@ function renderCard(sym, res, err){
   const isBuy = res.dir===1;
   el.className = 'card ' + (isBuy?'buy':'sell');
   const fresh = res.flipAgo <= 1;
-  const dist = Math.abs(res.close - res.line);
-  const distPct = (dist/res.close*100).toFixed(2);
+
+  /* ---- levels ---- */
+  const entry = res.close;
+  const sl = res.line;                       // Supertrend line = logical stop
+  const riskDist = Math.abs(entry - sl);
+  const rr = +cfg.rr || 1.5;
+  const tp = isBuy ? entry + riskDist*rr : entry - riskDist*rr;
+
+  /* ---- trend strength (dist in ATR units) ---- */
+  const s = res.atr>0 ? riskDist/res.atr : 0;
+  let trendTxt, trendCol;
+  if(s>=2.2){ trendTxt = isBuy?'STRONG BULLISH':'STRONG BEARISH'; trendCol = isBuy?'var(--buy)':'var(--sell)'; }
+  else if(s>=1.0){ trendTxt = isBuy?'BULLISH':'BEARISH'; trendCol = isBuy?'var(--buy)':'var(--sell)'; }
+  else { trendTxt='WEAK / CHOPPY'; trendCol='var(--gold)'; }
+
+  /* ---- volatility risk (ATR vs 50-bar avg) ---- */
+  const vr = res.avgAtr>0 ? res.atr/res.avgAtr : 1;
+  const volTxt = vr>1.25 ? 'HIGH' : vr>0.95 ? 'MEDIUM' : 'LOW';
+  const volCol = vr>1.25 ? 'var(--sell)' : vr>0.95 ? 'var(--gold)' : 'var(--buy)';
+
+  /* ---- EMA200 confirmation ---- */
+  const hasEma = res.ema != null;
+  const aligned = hasEma ? (isBuy ? entry > res.ema : entry < res.ema) : null;
+
+  /* ---- signal score (indicator-based, NOT win-rate) ---- */
+  let score = 50 + Math.min(28, s*13);
+  if(res.flipAgo>=3 && res.flipAgo<=40) score += 8;       // established trend, not brand-new whipsaw
+  if(vr>1.25) score -= 6;                                  // volatile = uncertain
+  if(aligned===true) score += 7;                           // Supertrend + EMA200 agree
+  if(aligned===false) score -= 10;                         // counter-trend vs EMA200
+  score = Math.round(Math.max(45, Math.min(95, score)));
+
+  /* ---- recommended risk ---- */
+  const recRisk = (score>=78 && vr<=1.25) ? '1%' : score>=65 ? '0.5%' : '0.25%';
+
   el.innerHTML = `
     <div class="rowtop">
       <div class="pair">${sym}</div>
       ${fresh?'<span class="newbadge">NEW FLIP</span>':''}
       <div class="sig ${isBuy?'buy':'sell'}">${isBuy?'&#9650; BUY':'&#9660; SELL'}</div>
     </div>
-    <div class="price">${fmt(res.close,sym)}</div>
+    <div class="price">${fmt(entry,sym)}</div>
+    <div class="lvls">
+      <div><span>ENTRY</span><b>${fmt(entry,sym)}</b></div>
+      <div><span>SL</span><b style="color:var(--sell)">${fmt(sl,sym)}</b></div>
+      <div><span>TP (${rr}&times;)</span><b style="color:var(--buy)">${fmt(tp,sym)}</b></div>
+    </div>
     <div class="meta">
-      <span>ST line <b>${fmt(res.line,sym)}</b></span>
-      <span>Dist <b>${distPct}%</b></span>
-      <span>Flip <b>${res.flipAgo} bar${res.flipAgo===1?'':'s'} ago</b></span>
+      <span>Score <b>${score}%</b></span>
+      <span>Trend <b style="color:${trendCol}">${trendTxt}</b></span>
+      ${hasEma ? `<span>EMA200 <b style="color:${aligned?'var(--buy)':'var(--sell)'}">${aligned?'&#10003; CONFIRMED':'&#10007; AGAINST'}</b></span>` : ''}
+      <span>Vol risk <b style="color:${volCol}">${volTxt}</b></span>
+      <span>Risk <b>${recRisk}</b></span>
+      <span>Flip <b>${res.flipAgo} bar${res.flipAgo===1?'':'s'}</b></span>
     </div>`;
   return el;
 }
 
 /* ================= scan ================= */
-async function scan(){
+let lastScanAt = 0;
+async function scan(force){
   if(scanning) return;
   if(!cfg.key){ showSetup(true); return; }
+  const since = Date.now() - lastScanAt;
+  if(!force && since < 60000){
+    statusText.textContent = 'Rate-limit guard: agla scan ' + Math.ceil((60000-since)/1000) + 's mein allowed';
+    return;
+  }
+  lastScanAt = Date.now();
   scanning = true;
   showSetup(false);
   dot.className='dot live';
@@ -370,6 +447,7 @@ function openSettings(){
   document.getElementById('refresh').value = String(cfg.refresh);
   document.getElementById('atrP').value = cfg.atrP;
   document.getElementById('atrM').value = cfg.atrM;
+  document.getElementById('rr').value = String(cfg.rr);
   document.getElementById('alerts').value = String(+cfg.alerts);
   overlay.classList.add('open');
 }
@@ -379,7 +457,7 @@ document.getElementById('btnSettings').onclick = openSettings;
 document.getElementById('btnSetup').onclick = openSettings;
 document.getElementById('btnClose').onclick = closeSettings;
 overlay.addEventListener('click', e=>{ if(e.target===overlay) closeSettings(); });
-document.getElementById('btnRefresh').onclick = scan;
+document.getElementById('btnRefresh').onclick = ()=> scan(true);
 
 document.getElementById('btnTest').onclick = ()=>{
   askNotifPermission();
@@ -400,11 +478,13 @@ document.getElementById('btnSave').onclick = ()=>{
   cfg.refresh = +document.getElementById('refresh').value;
   cfg.atrP = Math.max(2, +document.getElementById('atrP').value||10);
   cfg.atrM = Math.max(0.5, +document.getElementById('atrM').value||3);
+  cfg.rr = +document.getElementById('rr').value || 1.5;
   cfg.alerts = +document.getElementById('alerts').value;
   if(cfg.alerts) askNotifPermission();
   store.set('sd_key',cfg.key); store.set('sd_pairs',cfg.pairs);
   store.set('sd_interval',cfg.interval); store.set('sd_refresh',cfg.refresh);
   store.set('sd_atrp',cfg.atrP); store.set('sd_atrm',cfg.atrM);
+  store.set('sd_rr',cfg.rr);
   store.set('sd_alerts',cfg.alerts);
   closeSettings();
   schedule();
