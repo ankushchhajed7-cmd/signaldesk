@@ -61,6 +61,22 @@ main{padding:14px 12px;display:grid;gap:10px;grid-template-columns:1fr;max-width
 .lvls div{display:flex;flex-direction:column;gap:2px}
 .lvls span{font-size:9px;color:var(--muted);letter-spacing:.6px}
 .lvls b{font-size:12.5px;font-weight:700;font-variant-numeric:tabular-nums}
+/* ---------- tabs ---------- */
+.tabs{display:flex;gap:8px;padding:12px 12px 0;max-width:680px;margin:0 auto}
+.tab{flex:1;text-align:center;padding:9px;border-radius:8px;border:1px solid var(--line);
+  background:var(--surface);color:var(--muted);font-family:var(--mono);font-size:12px;font-weight:700;
+  letter-spacing:.8px;cursor:pointer}
+.tab.on{background:var(--gold);color:#14161C;border-color:var(--gold)}
+/* ---------- scalp ---------- */
+.statshead{max-width:680px;margin:12px auto 0;padding:10px 14px;background:var(--surface);
+  border:1px solid var(--line);border-radius:10px;font-size:12px;display:flex;gap:14px;flex-wrap:wrap}
+.statshead b{color:var(--gold)}
+.sighist{font-size:10.5px;color:var(--muted);margin-top:6px;line-height:1.8}
+.sighist .w{color:var(--buy);font-weight:700}
+.sighist .l{color:var(--sell);font-weight:700}
+.badge{font-size:9px;font-weight:800;border-radius:4px;padding:2px 6px;letter-spacing:.5px}
+.badge.pend{color:#14161C;background:var(--gold)}
+.badge.act{color:#fff;background:#2563EB}
 .skel{height:96px;border-radius:12px;background:linear-gradient(90deg,var(--surface),var(--surface2),var(--surface));
   background-size:200% 100%;animation:sh 1.2s linear infinite}
 @keyframes sh{to{background-position:-200% 0}}
@@ -107,7 +123,17 @@ footer{max-width:680px;margin:18px auto 0;padding:0 16px;font-size:9.5px;color:v
   <span class="tf" id="tfLabel"></span>
 </div>
 
+<div class="tabs">
+  <button class="tab on" id="tabTrend">TREND</button>
+  <button class="tab" id="tabScalp">SCALP</button>
+</div>
+
 <main id="grid"></main>
+
+<div id="scalpPane" style="display:none">
+  <div class="statshead" id="scalpStats"></div>
+  <main id="scalpGrid" style="padding-top:10px"></main>
+</div>
 
 <div class="setup" id="setup" hidden>
   <div class="big">&#128225;</div>
@@ -153,7 +179,19 @@ footer{max-width:680px;margin:18px auto 0;padding:0 16px;font-size:9.5px;color:v
     <label for="atrM">Supertrend — Multiplier</label>
     <input id="atrM" type="number" value="3" min="0.5" max="10" step="0.1">
 
-    <label for="rr">TP size (SL distance ke multiple mein)</label>
+    <label for="slMode">SL/TP mode</label>
+    <select id="slMode">
+      <option value="st" selected>Auto — SL Supertrend line pe, TP ratio se</option>
+      <option value="fixed">Fixed $ — TP/SL dollar mein (0.01 lot ke hisaab se)</option>
+    </select>
+
+    <label for="tpUsd">TP ($ per 0.01 lot) — fixed mode</label>
+    <input id="tpUsd" type="number" value="1" min="0.1" step="0.1">
+    <label for="slUsd">SL ($ per 0.01 lot) — fixed mode</label>
+    <input id="slUsd" type="number" value="4" min="0.1" step="0.1">
+    <div class="hint">Gold: $1 = 1.00 price move. Forex: $1 &asymp; 10 pips. <b style="color:var(--gold)">Dhyan:</b> $1 TP / $4 SL mein break-even ke liye 80%+ win rate chahiye, aur H1 gold ki hourly range $8-15 hoti hai — $4 SL noise mein hit ho sakta hai. Ye style M15 pe better suit karta hai.</div>
+
+    <label for="rr">TP size (SL distance ke multiple mein) — auto mode</label>
     <select id="rr">
       <option value="0.25">0.25&times; — chhota TP, bada SL (high win-rate style)</option>
       <option value="0.5">0.5&times;</option>
@@ -162,6 +200,19 @@ footer{max-width:680px;margin:18px auto 0;padding:0 16px;font-size:9.5px;color:v
       <option value="2">2&times;</option>
     </select>
     <div class="hint">SL hamesha Supertrend line pe hota hai (logical stop). 0.25&times; = aapka $1 TP / $4 SL style — dhyan rahe isme ~80%+ win rate chahiye break-even ke liye.</div>
+
+    <label for="scalp">SCALP signals (M15, Buy/Sell Stop style)</label>
+    <select id="scalp">
+      <option value="1" selected>On</option>
+      <option value="0">Off</option>
+    </select>
+    <div class="hint">M15 Supertrend flip pe signal: Entry (stop-order style), $ based TP/SL, hit tracking, monthly win-rate. App band ho toh result candle history se backfill hota hai — record complete rahega, real-time alert ke liye VPS EA hai.</div>
+    <label for="scTp">Scalp TP ($ / 0.01 lot)</label>
+    <input id="scTp" type="number" value="2" min="0.1" step="0.1">
+    <label for="scSl">Scalp SL ($ / 0.01 lot)</label>
+    <input id="scSl" type="number" value="5" min="0.1" step="0.1">
+    <label for="scMax">Max signals per pair per day</label>
+    <input id="scMax" type="number" value="3" min="1" max="10">
 
     <label for="alerts">Flip alerts (sound + vibration)</label>
     <select id="alerts">
@@ -194,6 +245,15 @@ let cfg = {
   atrP: store.get('sd_atrp',10),
   atrM: store.get('sd_atrm',3),
   rr: store.get('sd_rr',1.5),
+  slMode: store.get('sd_slmode','st'),
+  tpUsd: store.get('sd_tpusd',1),
+  slUsd: store.get('sd_slusd',4),
+  scalp: store.get('sd_scalp',1),
+  scTp: store.get('sd_sctp',2),
+  scSl: store.get('sd_scsl',5),
+  scBuf: store.get('sd_scbuf',0.5),
+  scMax: store.get('sd_scmax',3),
+  scExp: store.get('sd_scexp',6),
   alerts: store.get('sd_alerts',1)
 };
 let timer = null, scanning = false;
@@ -277,13 +337,29 @@ function supertrend(bars, period, mult){
 
 /* ================= api ================= */
 async function fetchPair(sym){
-  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(sym)}&interval=${cfg.interval}&outputsize=320&apikey=${encodeURIComponent(cfg.key)}`;
+  // Always fetch M15 base bars; trend TF is aggregated locally (1 API credit per pair)
+  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(sym)}&interval=15min&outputsize=1200&apikey=${encodeURIComponent(cfg.key)}`;
   const r = await fetch(url);
   const j = await r.json();
   if(j.status==='error') throw new Error(j.message || 'API error');
   if(!j.values) throw new Error('No data');
-  const bars = j.values.slice().reverse().map(v=>({h:+v.high, l:+v.low, c:+v.close}));
-  return bars;
+  return j.values.slice().reverse().map(v=>({t:v.datetime, h:+v.high, l:+v.low, c:+v.close}));
+}
+
+/* M15 -> higher TF aggregation */
+function aggregate(bars, tf){
+  if(tf==='15min') return bars;
+  const out=[]; let key=''; let cur=null;
+  for(const b of bars){
+    let k;
+    if(tf==='1h') k = b.t.slice(0,13);
+    else if(tf==='4h'){ const h=Math.floor(+b.t.slice(11,13)/4)*4; k=b.t.slice(0,10)+'_'+h; }
+    else k = b.t.slice(0,10); // 1day
+    if(k!==key){ if(cur) out.push(cur); key=k; cur={t:b.t,h:b.h,l:b.l,c:b.c}; }
+    else { cur.h=Math.max(cur.h,b.h); cur.l=Math.min(cur.l,b.l); cur.c=b.c; }
+  }
+  if(cur) out.push(cur);
+  return out;
 }
 
 /* ================= render ================= */
@@ -319,13 +395,23 @@ function renderCard(sym, res, err){
 
   /* ---- levels ---- */
   const entry = res.close;
-  const sl = res.line;                       // Supertrend line = logical stop
-  const riskDist = Math.abs(entry - sl);
-  const rr = +cfg.rr || 1.5;
-  const tp = isBuy ? entry + riskDist*rr : entry - riskDist*rr;
+  let sl, tp, tpLabel;
+  const stRisk = Math.abs(entry - res.line);
+  if(cfg.slMode==='fixed'){
+    // $ → price distance for 0.01 lot: XAU 1oz → $X = X price; XXX/USD 1000 units → X/1000; USD/XXX → X*price/1000
+    const d = usd => sym.includes('XAU') ? usd : sym.startsWith('USD/') ? usd*entry/1000 : usd/1000;
+    sl = isBuy ? entry - d(+cfg.slUsd) : entry + d(+cfg.slUsd);
+    tp = isBuy ? entry + d(+cfg.tpUsd) : entry - d(+cfg.tpUsd);
+    tpLabel = `TP ($${cfg.tpUsd})`;
+  } else {
+    sl = res.line;                           // Supertrend line = logical stop
+    const rr = +cfg.rr || 1.5;
+    tp = isBuy ? entry + stRisk*rr : entry - stRisk*rr;
+    tpLabel = `TP (${rr}&times;)`;
+  }
 
   /* ---- trend strength (dist in ATR units) ---- */
-  const s = res.atr>0 ? riskDist/res.atr : 0;
+  const s = res.atr>0 ? stRisk/res.atr : 0;
   let trendTxt, trendCol;
   if(s>=2.2){ trendTxt = isBuy?'STRONG BULLISH':'STRONG BEARISH'; trendCol = isBuy?'var(--buy)':'var(--sell)'; }
   else if(s>=1.0){ trendTxt = isBuy?'BULLISH':'BEARISH'; trendCol = isBuy?'var(--buy)':'var(--sell)'; }
@@ -360,8 +446,8 @@ function renderCard(sym, res, err){
     <div class="price">${fmt(entry,sym)}</div>
     <div class="lvls">
       <div><span>ENTRY</span><b>${fmt(entry,sym)}</b></div>
-      <div><span>SL</span><b style="color:var(--sell)">${fmt(sl,sym)}</b></div>
-      <div><span>TP (${rr}&times;)</span><b style="color:var(--buy)">${fmt(tp,sym)}</b></div>
+      <div><span>SL${cfg.slMode==='fixed'?` ($${cfg.slUsd})`:''}</span><b style="color:var(--sell)">${fmt(sl,sym)}</b></div>
+      <div><span>${tpLabel}</span><b style="color:var(--buy)">${fmt(tp,sym)}</b></div>
     </div>
     <div class="meta">
       <span>Score <b>${score}%</b></span>
@@ -372,6 +458,135 @@ function renderCard(sym, res, err){
       <span>Flip <b>${res.flipAgo} bar${res.flipAgo===1?'':'s'}</b></span>
     </div>`;
   return el;
+}
+
+/* ================= scalp engine ================= */
+function usdToDist(sym, px, usd){
+  return sym.includes('XAU') ? usd : sym.startsWith('USD/') ? usd*px/1000 : usd/1000;
+}
+function monthKey(){ return new Date().toISOString().slice(0,7); }
+function scalpAlert(text){
+  if(!+cfg.alerts) return;
+  beep();
+  if(navigator.vibrate) navigator.vibrate([200,100,200]);
+  if('Notification' in window && Notification.permission==='granted'){
+    try{ new Notification('SignalDesk SCALP', { body:text, icon:'./icon-192.png' }); }catch(e){}
+  }
+}
+function addResult(sym, dir, res){ // res: 'W'|'L'|'EXP'
+  if(res!=='EXP'){
+    const stats = store.get('sd_stats',{});
+    const mk = monthKey();
+    if(!stats[mk]) stats[mk]={w:0,l:0};
+    if(res==='W') stats[mk].w++; else stats[mk].l++;
+    store.set('sd_stats',stats);
+  }
+  const hist = store.get('sd_hist',[]);
+  hist.unshift({sym, dir, res, ts:new Date().toISOString().slice(5,16).replace('T',' ')});
+  store.set('sd_hist', hist.slice(0,20));
+}
+function replaySignal(sig, bars){
+  // returns 'W','L','EXP','TRIG', or null (still open). Mutates sig.state on trigger.
+  const isBuy = sig.dir===1;
+  const startState = sig.state;
+  const expMs = (+cfg.scExp)*15*60000;
+  for(const b of bars){
+    if(b.t <= sig.created) continue;
+    if(sig.state===1){
+      if(new Date(b.t.replace(' ','T')) - new Date(sig.created.replace(' ','T')) > expMs) return 'EXP';
+      const trig = isBuy ? b.h>=sig.entry : b.l<=sig.entry;
+      if(!trig) continue;
+      sig.state=2; // triggered — same bar can also hit TP/SL below
+    }
+    if(sig.state===2){
+      const tpHit = isBuy ? b.h>=sig.tp : b.l<=sig.tp;
+      const slHit = isBuy ? b.l<=sig.sl : b.h>=sig.sl;
+      if(slHit) return 'L';        // conservative: SL first if both in one bar
+      if(tpHit) return 'W';
+    }
+  }
+  return (startState===1 && sig.state===2) ? 'TRIG' : null;
+}
+function processScalp(sym, bars){
+  const closed = bars.slice(0,-1);
+  const st = supertrend(closed, +cfg.atrP, +cfg.atrM);
+  if(!st) return;
+  const sigs   = store.get('sd_sigs',{});
+  const scDirs = store.get('sd_scdirs',{});
+  const prev   = scDirs[sym];
+  const ymd = new Date().toISOString().slice(0,10);
+  let dc = store.get('sd_daycount',{ymd:'',counts:{}});
+  if(dc.ymd!==ymd) dc={ymd, counts:{}};
+
+  //--- open signal: backfill check from candle history
+  let sig = sigs[sym];
+  if(sig){
+    const ev = replaySignal(sig, bars);
+    if(ev==='W'){ addResult(sym,sig.dir,'W'); scalpAlert('✅ '+sym+' TP HIT +$'+cfg.scTp); delete sigs[sym]; }
+    else if(ev==='L'){ addResult(sym,sig.dir,'L'); scalpAlert('❌ '+sym+' SL HIT -$'+cfg.scSl); delete sigs[sym]; }
+    else if(ev==='EXP'){ addResult(sym,sig.dir,'EXP'); delete sigs[sym]; }
+    else if(ev==='TRIG'){ scalpAlert('▶️ '+sym+' TRIGGERED'); sigs[sym]=sig; }
+    else sigs[sym]=sig;
+  }
+
+  //--- new signal on M15 flip
+  if(prev!==undefined && st.dir!==prev && !sigs[sym] && (dc.counts[sym]||0) < +cfg.scMax){
+    const px = bars[bars.length-1].c;
+    const entry = st.dir===1 ? px + usdToDist(sym,px,+cfg.scBuf) : px - usdToDist(sym,px,+cfg.scBuf);
+    const tp = st.dir===1 ? entry + usdToDist(sym,px,+cfg.scTp) : entry - usdToDist(sym,px,+cfg.scTp);
+    const sl = st.dir===1 ? entry - usdToDist(sym,px,+cfg.scSl) : entry + usdToDist(sym,px,+cfg.scSl);
+    sigs[sym] = {dir:st.dir, state:1, entry, tp, sl, created:bars[bars.length-1].t};
+    dc.counts[sym]=(dc.counts[sym]||0)+1;
+    scalpAlert((st.dir===1?'🟢 BUY STOP ':'🔴 SELL STOP ')+sym+' @ '+fmt(entry,sym));
+  }
+  scDirs[sym]=st.dir;
+  store.set('sd_scdirs',scDirs); store.set('sd_sigs',sigs); store.set('sd_daycount',dc);
+}
+function renderScalp(){
+  const stats = store.get('sd_stats',{})[monthKey()] || {w:0,l:0};
+  const tot = stats.w+stats.l;
+  const pct = tot? Math.round(100*stats.w/tot) : 0;
+  document.getElementById('scalpStats').innerHTML =
+    `<span>This month: <b>${stats.w}W / ${stats.l}L</b></span><span>Win rate: <b>${pct}%</b></span><span>TP $${cfg.scTp} · SL $${cfg.scSl}</span>`;
+  const sg = document.getElementById('scalpGrid');
+  sg.innerHTML='';
+  const sigs = store.get('sd_sigs',{});
+  const dc = store.get('sd_daycount',{counts:{}});
+  let any=false;
+  for(const sym of cfg.pairs){
+    const s = sigs[sym];
+    if(!s) continue;
+    any=true;
+    const isBuy = s.dir===1;
+    const el=document.createElement('div');
+    el.className='card '+(isBuy?'buy':'sell');
+    el.innerHTML = `
+      <div class="rowtop">
+        <div class="pair">${sym}</div>
+        <span class="badge ${s.state===1?'pend':'act'}">${s.state===1?'PENDING':'ACTIVE'}</span>
+        <div class="sig ${isBuy?'buy':'sell'}">${isBuy?'&#9650; BUY STOP':'&#9660; SELL STOP'}</div>
+      </div>
+      <div class="lvls">
+        <div><span>ENTRY</span><b>${fmt(s.entry,sym)}</b></div>
+        <div><span>SL ($${cfg.scSl})</span><b style="color:var(--sell)">${fmt(s.sl,sym)}</b></div>
+        <div><span>TP ($${cfg.scTp})</span><b style="color:var(--buy)">${fmt(s.tp,sym)}</b></div>
+      </div>
+      <div class="meta"><span>Created <b>${s.created.slice(5,16)}</b></span><span>Today <b>${(dc.counts&&dc.counts[sym])||0}/${cfg.scMax}</b></span></div>`;
+    sg.appendChild(el);
+  }
+  const hist = store.get('sd_hist',[]);
+  const hEl=document.createElement('div');
+  hEl.className='card';
+  hEl.innerHTML = '<div class="pair" style="font-size:13px">HISTORY</div><div class="sighist">'+
+    (hist.length? hist.map(h=>`<div><span class="${h.res==='W'?'w':h.res==='L'?'l':''}">${h.res==='W'?'✅':h.res==='L'?'❌':'⏸'}</span> ${h.sym} ${h.dir===1?'BUY':'SELL'} · ${h.ts}</div>`).join('') : 'Abhi koi result nahi — signals aane do.')+
+    '</div>';
+  sg.appendChild(hEl);
+  if(!any){
+    const e=document.createElement('div');
+    e.className='card';
+    e.innerHTML='<div class="meta">Koi open signal nahi. M15 flip pe naya signal banega (max '+cfg.scMax+'/pair/day).</div>';
+    sg.insertBefore(e, sg.firstChild);
+  }
 }
 
 /* ================= scan ================= */
@@ -397,14 +612,16 @@ async function scan(force){
   let errors = 0;
   for(const sym of cfg.pairs){
     try{
-      const bars = await fetchPair(sym);
-      const res = supertrend(bars, +cfg.atrP, +cfg.atrM);
+      const bars = await fetchPair(sym);                 // M15 base
+      const tBars = aggregate(bars, cfg.interval);       // trend TF
+      const res = supertrend(tBars, +cfg.atrP, +cfg.atrM);
       results.push({sym, res});
       if(res){
         const prev = lastDirs[sym];
         if(prev !== undefined && prev !== res.dir) flips.push({sym, dir:res.dir});
         lastDirs[sym] = res.dir;
       }
+      if(+cfg.scalp) processScalp(sym, bars);            // scalp on raw M15
     }catch(e){
       errors++;
       results.push({sym, err: String(e.message||e).slice(0,80)});
@@ -413,6 +630,7 @@ async function scan(force){
   }
   store.set('sd_dirs', lastDirs);
   fireAlert(flips);
+  renderScalp();
   // sort: fresh flips first, then buys, then sells
   results.sort((a,b)=>{
     const fa=a.res? (a.res.flipAgo<=1?0:1):2, fb=b.res?(b.res.flipAgo<=1?0:1):2;
@@ -438,6 +656,12 @@ function schedule(){
   if(+cfg.refresh > 0) timer = setInterval(scan, +cfg.refresh*1000);
 }
 
+/* ================= tabs ================= */
+const tabTrend=document.getElementById('tabTrend'), tabScalp=document.getElementById('tabScalp');
+const scalpPane=document.getElementById('scalpPane');
+tabTrend.onclick=()=>{ tabTrend.classList.add('on'); tabScalp.classList.remove('on'); grid.style.display='grid'; scalpPane.style.display='none'; };
+tabScalp.onclick=()=>{ tabScalp.classList.add('on'); tabTrend.classList.remove('on'); grid.style.display='none'; scalpPane.style.display='block'; renderScalp(); };
+
 /* ================= settings ui ================= */
 const overlay = document.getElementById('overlay');
 function openSettings(){
@@ -448,6 +672,13 @@ function openSettings(){
   document.getElementById('atrP').value = cfg.atrP;
   document.getElementById('atrM').value = cfg.atrM;
   document.getElementById('rr').value = String(cfg.rr);
+  document.getElementById('slMode').value = cfg.slMode;
+  document.getElementById('tpUsd').value = cfg.tpUsd;
+  document.getElementById('slUsd').value = cfg.slUsd;
+  document.getElementById('scalp').value = String(+cfg.scalp);
+  document.getElementById('scTp').value = cfg.scTp;
+  document.getElementById('scSl').value = cfg.scSl;
+  document.getElementById('scMax').value = cfg.scMax;
   document.getElementById('alerts').value = String(+cfg.alerts);
   overlay.classList.add('open');
 }
@@ -479,12 +710,21 @@ document.getElementById('btnSave').onclick = ()=>{
   cfg.atrP = Math.max(2, +document.getElementById('atrP').value||10);
   cfg.atrM = Math.max(0.5, +document.getElementById('atrM').value||3);
   cfg.rr = +document.getElementById('rr').value || 1.5;
+  cfg.slMode = document.getElementById('slMode').value;
+  cfg.tpUsd = Math.max(0.1, +document.getElementById('tpUsd').value||1);
+  cfg.slUsd = Math.max(0.1, +document.getElementById('slUsd').value||4);
+  cfg.scalp = +document.getElementById('scalp').value;
+  cfg.scTp = Math.max(0.1, +document.getElementById('scTp').value||2);
+  cfg.scSl = Math.max(0.1, +document.getElementById('scSl').value||5);
+  cfg.scMax = Math.max(1, +document.getElementById('scMax').value||3);
   cfg.alerts = +document.getElementById('alerts').value;
   if(cfg.alerts) askNotifPermission();
   store.set('sd_key',cfg.key); store.set('sd_pairs',cfg.pairs);
   store.set('sd_interval',cfg.interval); store.set('sd_refresh',cfg.refresh);
   store.set('sd_atrp',cfg.atrP); store.set('sd_atrm',cfg.atrM);
   store.set('sd_rr',cfg.rr);
+  store.set('sd_slmode',cfg.slMode); store.set('sd_tpusd',cfg.tpUsd); store.set('sd_slusd',cfg.slUsd);
+  store.set('sd_scalp',cfg.scalp); store.set('sd_sctp',cfg.scTp); store.set('sd_scsl',cfg.scSl); store.set('sd_scmax',cfg.scMax);
   store.set('sd_alerts',cfg.alerts);
   closeSettings();
   schedule();
