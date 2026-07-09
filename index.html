@@ -338,7 +338,7 @@ function supertrend(bars, period, mult){
 /* ================= api ================= */
 async function fetchPair(sym){
   // Always fetch M15 base bars; trend TF is aggregated locally (1 API credit per pair)
-  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(sym)}&interval=15min&outputsize=1200&apikey=${encodeURIComponent(cfg.key)}`;
+  const url = `https://api.twelvedata.com/time_series?symbol=${encodeURIComponent(sym)}&interval=15min&outputsize=1200&timezone=Asia/Kolkata&apikey=${encodeURIComponent(cfg.key)}`;
   const r = await fetch(url);
   const j = await r.json();
   if(j.status==='error') throw new Error(j.message || 'API error');
@@ -465,6 +465,14 @@ function usdToDist(sym, px, usd){
   return sym.includes('XAU') ? usd : sym.startsWith('USD/') ? usd*px/1000 : usd/1000;
 }
 function monthKey(){ return new Date().toISOString().slice(0,7); }
+function fmt12(x){ // "2026-07-10 07:00:00" or Date -> "10 Jul, 7:00 AM"
+  const d = (x instanceof Date) ? x : new Date(String(x).replace(' ','T'));
+  if(isNaN(d)) return String(x);
+  const mo=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  let h=d.getHours(); const m=String(d.getMinutes()).padStart(2,'0');
+  const ap=h>=12?'PM':'AM'; h=h%12; if(h===0)h=12;
+  return d.getDate()+' '+mo[d.getMonth()]+', '+h+':'+m+' '+ap;
+}
 function scalpAlert(text){
   if(!+cfg.alerts) return;
   beep();
@@ -482,7 +490,7 @@ function addResult(sym, dir, res){ // res: 'W'|'L'|'EXP'
     store.set('sd_stats',stats);
   }
   const hist = store.get('sd_hist',[]);
-  hist.unshift({sym, dir, res, ts:new Date().toISOString().slice(5,16).replace('T',' ')});
+  hist.unshift({sym, dir, res, ts:fmt12(new Date())});
   store.set('sd_hist', hist.slice(0,20));
 }
 function replaySignal(sig, bars){
@@ -571,7 +579,7 @@ function renderScalp(){
         <div><span>SL ($${cfg.scSl})</span><b style="color:var(--sell)">${fmt(s.sl,sym)}</b></div>
         <div><span>TP ($${cfg.scTp})</span><b style="color:var(--buy)">${fmt(s.tp,sym)}</b></div>
       </div>
-      <div class="meta"><span>Created <b>${s.created.slice(5,16)}</b></span><span>Today <b>${(dc.counts&&dc.counts[sym])||0}/${cfg.scMax}</b></span></div>`;
+      <div class="meta"><span>Created <b>${fmt12(s.created)}</b></span><span>Today <b>${(dc.counts&&dc.counts[sym])||0}/${cfg.scMax}</b></span></div>`;
     sg.appendChild(el);
   }
   const hist = store.get('sd_hist',[]);
