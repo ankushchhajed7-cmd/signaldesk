@@ -241,6 +241,14 @@ footer{max-width:680px;margin:18px auto 0;padding:0 16px;font-size:9.5px;color:v
     <div class="hint">Jab kisi pair ka signal BUY&harr;SELL flip hota hai, beep + vibrate + notification milega. <b style="color:var(--gold)">Note:</b> app khula hona chahiye ya auto-refresh chal raha ho — background push free API route mein possible nahi.</div>
     <button class="btn ghost" id="btnTest" style="margin-top:10px;width:100%">&#128276; Test alert</button>
 
+    <label style="margin-top:18px">Backup &amp; restore (data phone storage clear hone se bachao)</label>
+    <div class="hint">Chrome/Android kabhi-kabhi site data clear kar deta hai (storage cleanup, "clear browsing data"). Backup file hafte mein 1-2 baar download kar lo — history/stats/settings sab safe rahenge.</div>
+    <div class="sheetbtns" style="margin-top:8px">
+      <button class="btn ghost" id="btnBackup" style="flex:1">&#11015; Download backup</button>
+      <button class="btn ghost" id="btnRestore" style="flex:1">&#11014; Restore file</button>
+    </div>
+    <input type="file" id="restoreFile" accept="application/json" style="display:none">
+
     <div class="sheetbtns">
       <button class="btn ghost" id="btnClose">Cancel</button>
       <button class="btn" id="btnSave">Save &amp; scan</button>
@@ -802,6 +810,38 @@ document.getElementById('btnRefresh').onclick = ()=> scan(true);
 document.getElementById('btnTest').onclick = ()=>{
   askNotifPermission();
   fireAlertTest();
+};
+
+document.getElementById('btnBackup').onclick = ()=>{
+  const data = {};
+  for(let i=0;i<localStorage.length;i++){
+    const k = localStorage.key(i);
+    if(k && k.startsWith('sd_')) data[k] = localStorage.getItem(k);
+  }
+  const blob = new Blob([JSON.stringify(data,null,2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const stamp = new Date().toISOString().slice(0,10);
+  a.href = url; a.download = 'signaldesk-backup-'+stamp+'.json';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+};
+
+document.getElementById('btnRestore').onclick = ()=> document.getElementById('restoreFile').click();
+document.getElementById('restoreFile').onchange = (e)=>{
+  const file = e.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = ()=>{
+    try{
+      const data = JSON.parse(reader.result);
+      let n=0;
+      for(const k in data){ if(k.startsWith('sd_')){ localStorage.setItem(k, data[k]); n++; } }
+      alert('Restore ho gaya ('+n+' items). App reload ho raha hai...');
+      location.reload();
+    }catch(err){ alert('Backup file padh nahi paya — sahi .json file chuno.'); }
+  };
+  reader.readAsText(file);
 };
 function fireAlertTest(){
   beep();
