@@ -213,9 +213,22 @@ footer{max-width:680px;margin:18px auto 0;padding:0 16px;font-size:9.5px;color:v
       <option value="0">Off</option>
     </select>
     <div class="hint">M15 Supertrend flip pe signal: Entry (stop-order style), $ based TP/SL, hit tracking, monthly win-rate. App band ho toh result candle history se backfill hota hai — record complete rahega, real-time alert ke liye VPS EA hai.</div>
-    <label for="scTp">Scalp TP ($ / 0.01 lot)</label>
+    <label for="scSlMode">Scalp SL mode</label>
+    <select id="scSlMode">
+      <option value="fixed" selected>Fixed $ — same for all pairs</option>
+      <option value="atr">ATR-based — auto adjusts per pair volatility</option>
+    </select>
+    <div class="hint">Fixed: har pair pe same $ SL/TP (jaisa abhi hai). ATR: SL = 1.5&times; ATR (M15), TP = SL &times; ratio neeche. Dono mode ka result HISTORY tab mein ALAG track hota hai — 1 mahine baad compare karke best mode chuno.</div>
+    <label for="scAtrRR">ATR mode — TP:SL ratio</label>
+    <select id="scAtrRR">
+      <option value="1">1 : 1</option>
+      <option value="1.5" selected>1 : 1.5</option>
+      <option value="2">1 : 2</option>
+    </select>
+
+    <label for="scTp">Fixed mode — TP ($ / 0.01 lot)</label>
     <input id="scTp" type="number" value="2" min="0.1" step="0.1">
-    <label for="scSl">Scalp SL ($ / 0.01 lot)</label>
+    <label for="scSl">Fixed mode — SL ($ / 0.01 lot)</label>
     <input id="scSl" type="number" value="5" min="0.1" step="0.1">
     <label for="scMax">Max signals per pair per day</label>
     <input id="scMax" type="number" value="3" min="1" max="10">
@@ -257,6 +270,8 @@ let cfg = {
   scalp: store.get('sd_scalp',1),
   scTp: store.get('sd_sctp',2),
   scSl: store.get('sd_scsl',5),
+  scSlMode: store.get('sd_scslmode','fixed'),
+  scAtrRR: store.get('sd_scatrrr',1.5),
   scBuf: store.get('sd_scbuf',0.5),
   scMax: store.get('sd_scmax',3),
   scExp: store.get('sd_scexp',6),
@@ -487,16 +502,16 @@ function scalpAlert(text){
     try{ new Notification('SignalDesk SCALP', { body:text, icon:'./icon-192.png' }); }catch(e){}
   }
 }
-function addResult(sym, dir, res){ // res: 'W'|'L'|'EXP'
+function addResult(sym, dir, res, mode){ // res: 'W'|'L'|'EXP'
   if(res!=='EXP'){
     const stats = store.get('sd_stats',{});
-    const mk = monthKey();
+    const mk = monthKey()+'|'+mode;
     if(!stats[mk]) stats[mk]={w:0,l:0};
     if(res==='W') stats[mk].w++; else stats[mk].l++;
     store.set('sd_stats',stats);
   }
   const hist = store.get('sd_hist',[]);
-  hist.unshift({sym, dir, res, ts:fmt12(new Date())});
+  hist.unshift({sym, dir, res, mode, ts:fmt12(new Date())});
   store.set('sd_hist', hist.slice(0,150));
 }
 function replaySignal(sig, bars){
@@ -536,32 +551,45 @@ function processScalp(sym, bars){
   let sig = sigs[sym];
   if(sig){
     const ev = replaySignal(sig, bars);
-    if(ev==='W'){ addResult(sym,sig.dir,'W'); scalpAlert('✅ '+sym+' TP HIT +$'+cfg.scTp); delete sigs[sym]; }
-    else if(ev==='L'){ addResult(sym,sig.dir,'L'); scalpAlert('❌ '+sym+' SL HIT -$'+cfg.scSl); delete sigs[sym]; }
-    else if(ev==='EXP'){ addResult(sym,sig.dir,'EXP'); delete sigs[sym]; }
-    else if(ev==='TRIG'){ scalpAlert('▶️ '+sym+' TRIGGERED'); sigs[sym]=sig; }
+    const tpTxt = sig.mode==='atr' ? '(ATR)' : '+$'+cfg.scTp;
+    const slTxt = sig.mode==='atr' ? '(ATR)' : '-$'+cfg.scSl;
+    if(ev==='W'){ addResult(sym,sig.dir,'W',sig.mode); scalpAlert('✅ '+sym+' TP HIT '+tpTxt+' ['+sig.mode.toUpperCase()+']'); delete sigs[sym]; }
+    else if(ev==='L'){ addResult(sym,sig.dir,'L',sig.mode); scalpAlert('❌ '+sym+' SL HIT '+slTxt+' ['+sig.mode.toUpperCase()+']'); delete sigs[sym]; }
+    else if(ev==='EXP'){ addResult(sym,sig.dir,'EXP',sig.mode); delete sigs[sym]; }
+    else if(ev==='TRIG'){ scalpAlert('▶️ '+sym+' TRIGGERED ['+sig.mode.toUpperCase()+']'); sigs[sym]=sig; }
     else sigs[sym]=sig;
   }
 
   //--- new signal on M15 flip
   if(prev!==undefined && st.dir!==prev && !sigs[sym] && (dc.counts[sym]||0) < +cfg.scMax){
     const px = bars[bars.length-1].c;
+    const mode = cfg.scSlMode; // 'fixed' or 'atr'
     const entry = st.dir===1 ? px + usdToDist(sym,px,+cfg.scBuf) : px - usdToDist(sym,px,+cfg.scBuf);
-    const tp = st.dir===1 ? entry + usdToDist(sym,px,+cfg.scTp) : entry - usdToDist(sym,px,+cfg.scTp);
-    const sl = st.dir===1 ? entry - usdToDist(sym,px,+cfg.scSl) : entry + usdToDist(sym,px,+cfg.scSl);
-    sigs[sym] = {dir:st.dir, state:1, entry, tp, sl, created:bars[bars.length-1].t};
+    let tp, sl;
+    if(mode==='atr' && st.atr>0){
+      const slD = 1.5*st.atr;
+      const tpD = slD * (+cfg.scAtrRR);
+      tp = st.dir===1 ? entry + tpD : entry - tpD;
+      sl = st.dir===1 ? entry - slD : entry + slD;
+    } else {
+      const tpD = usdToDist(sym,px,+cfg.scTp);
+      const slD = usdToDist(sym,px,+cfg.scSl);
+      tp = st.dir===1 ? entry + tpD : entry - tpD;
+      sl = st.dir===1 ? entry - slD : entry + slD;
+    }
+    sigs[sym] = {dir:st.dir, state:1, entry, tp, sl, created:bars[bars.length-1].t, mode};
     dc.counts[sym]=(dc.counts[sym]||0)+1;
-    scalpAlert((st.dir===1?'🟢 BUY STOP ':'🔴 SELL STOP ')+sym+' @ '+fmt(entry,sym));
+    scalpAlert((st.dir===1?'🟢 BUY STOP ':'🔴 SELL STOP ')+sym+' @ '+fmt(entry,sym)+' ['+mode.toUpperCase()+']');
   }
   scDirs[sym]=st.dir;
   store.set('sd_scdirs',scDirs); store.set('sd_sigs',sigs); store.set('sd_daycount',dc);
 }
 function renderScalp(){
-  const stats = store.get('sd_stats',{})[monthKey()] || {w:0,l:0};
+  const stats = store.get('sd_stats',{})[monthKey()+'|'+cfg.scSlMode] || {w:0,l:0};
   const tot = stats.w+stats.l;
   const pct = tot? Math.round(100*stats.w/tot) : 0;
   document.getElementById('scalpStats').innerHTML =
-    `<span>This month: <b>${stats.w}W / ${stats.l}L</b></span><span>Win rate: <b>${pct}%</b></span><span>TP $${cfg.scTp} · SL $${cfg.scSl}</span>`;
+    `<span>${cfg.scSlMode.toUpperCase()} this month: <b>${stats.w}W / ${stats.l}L</b></span><span>Win rate: <b>${pct}%</b></span>`;
   const sg = document.getElementById('scalpGrid');
   sg.innerHTML='';
   const sigs = store.get('sd_sigs',{});
@@ -574,6 +602,8 @@ function renderScalp(){
     const isBuy = s.dir===1;
     const el=document.createElement('div');
     el.className='card '+(isBuy?'buy':'sell');
+    const slLbl = s.mode==='atr' ? 'SL (ATR)' : `SL ($${cfg.scSl})`;
+    const tpLbl = s.mode==='atr' ? 'TP (ATR)' : `TP ($${cfg.scTp})`;
     el.innerHTML = `
       <div class="rowtop">
         <div class="pair">${sym}</div>
@@ -582,10 +612,10 @@ function renderScalp(){
       </div>
       <div class="lvls">
         <div><span>ENTRY</span><b>${fmt(s.entry,sym)}</b></div>
-        <div><span>SL ($${cfg.scSl})</span><b style="color:var(--sell)">${fmt(s.sl,sym)}</b></div>
-        <div><span>TP ($${cfg.scTp})</span><b style="color:var(--buy)">${fmt(s.tp,sym)}</b></div>
+        <div><span>${slLbl}</span><b style="color:var(--sell)">${fmt(s.sl,sym)}</b></div>
+        <div><span>${tpLbl}</span><b style="color:var(--buy)">${fmt(s.tp,sym)}</b></div>
       </div>
-      <div class="meta"><span>Created <b>${fmt12(s.created)}</b></span><span>Today <b>${(dc.counts&&dc.counts[sym])||0}/${cfg.scMax}</b></span></div>`;
+      <div class="meta"><span>Mode <b>${(s.mode||'fixed').toUpperCase()}</b></span><span>Created <b>${fmt12(s.created)}</b></span><span>Today <b>${(dc.counts&&dc.counts[sym])||0}/${cfg.scMax}</b></span></div>`;
     sg.appendChild(el);
   }
   if(!any){
@@ -597,22 +627,35 @@ function renderScalp(){
 }
 function renderHistory(){
   const hist = store.get('sd_hist',[]);
-  const stats = store.get('sd_stats',{})[monthKey()] || {w:0,l:0};
-  const tot = stats.w+stats.l;
-  const pct = tot? Math.round(100*stats.w/tot) : 0;
+  const allStats = store.get('sd_stats',{});
+  const mk = monthKey();
+  const fx = allStats[mk+'|fixed'] || {w:0,l:0};
+  const at = allStats[mk+'|atr'] || {w:0,l:0};
+  const fxTot=fx.w+fx.l, atTot=at.w+at.l;
+  const fxPct = fxTot? Math.round(100*fx.w/fxTot):0;
+  const atPct = atTot? Math.round(100*at.w/atTot):0;
   document.getElementById('histStats').innerHTML =
-    `<span>This month: <b>${stats.w}W / ${stats.l}L</b></span><span>Win rate: <b>${pct}%</b></span><span>Total logged: <b>${hist.length}</b></span>`;
+    `<span>FIXED $: <b>${fx.w}W/${fx.l}L (${fxPct}%)</b></span><span>ATR: <b>${at.w}W/${at.l}L (${atPct}%)</b></span><span>Total logged: <b>${hist.length}</b></span>`;
 
-  // per-pair breakdown (this month, W/L only)
+  const hg = document.getElementById('histGrid');
+  hg.innerHTML='';
+
+  // mode comparison card
+  const cmp=document.createElement('div');
+  cmp.className='card';
+  cmp.innerHTML = '<div class="pair" style="font-size:13px;margin-bottom:8px">FIXED $ vs ATR — THIS MONTH</div>'+
+    `<div class="meta"><span style="min-width:70px;display:inline-block;color:var(--text)">FIXED $</span><span>${fx.w}W/${fx.l}L</span><span><b style="color:${fxPct>=60?'var(--buy)':fxPct>=40?'var(--gold)':'var(--sell)'}">${fxPct}%</b></span></div>`+
+    `<div class="meta" style="margin-top:6px"><span style="min-width:70px;display:inline-block;color:var(--text)">ATR</span><span>${at.w}W/${at.l}L</span><span><b style="color:${atPct>=60?'var(--buy)':atPct>=40?'var(--gold)':'var(--sell)'}">${atPct}%</b></span></div>`+
+    '<div class="hint" style="margin-top:8px">1 mahine ka data jama hone do, phir jo mode zyada win-rate + consistent ho wahi aage use karo.</div>';
+  hg.appendChild(cmp);
+
+  // per-pair breakdown (both modes combined, W/L only)
   const byPair={};
   for(const h of hist){
     if(h.res==='EXP') continue;
-    if(!h.ts) continue;
     byPair[h.sym] = byPair[h.sym] || {w:0,l:0};
     if(h.res==='W') byPair[h.sym].w++; else byPair[h.sym].l++;
   }
-  const hg = document.getElementById('histGrid');
-  hg.innerHTML='';
   const pairs = Object.keys(byPair);
   if(pairs.length){
     const bd=document.createElement('div');
@@ -628,7 +671,7 @@ function renderHistory(){
   const listCard=document.createElement('div');
   listCard.className='card';
   listCard.innerHTML = '<div class="pair" style="font-size:13px;margin-bottom:6px">ALL SIGNALS</div><div class="sighist">'+
-    (hist.length? hist.map(h=>`<div><span class="${h.res==='W'?'w':h.res==='L'?'l':''}">${h.res==='W'?'✅':h.res==='L'?'❌':'⏸'}</span> ${h.sym} ${h.dir===1?'BUY':'SELL'} · ${h.ts}</div>`).join('') : 'Abhi koi result nahi.')+
+    (hist.length? hist.map(h=>`<div><span class="${h.res==='W'?'w':h.res==='L'?'l':''}">${h.res==='W'?'✅':h.res==='L'?'❌':'⏸'}</span> ${h.sym} ${h.dir===1?'BUY':'SELL'} · <span style="color:var(--gold)">${(h.mode||'fixed').toUpperCase()}</span> · ${h.ts}</div>`).join('') : 'Abhi koi result nahi.')+
     '</div>';
   hg.appendChild(listCard);
 }
@@ -728,6 +771,8 @@ function openSettings(){
   document.getElementById('tpUsd').value = cfg.tpUsd;
   document.getElementById('slUsd').value = cfg.slUsd;
   document.getElementById('scalp').value = String(+cfg.scalp);
+  document.getElementById('scSlMode').value = cfg.scSlMode;
+  document.getElementById('scAtrRR').value = String(cfg.scAtrRR);
   document.getElementById('scTp').value = cfg.scTp;
   document.getElementById('scSl').value = cfg.scSl;
   document.getElementById('scMax').value = cfg.scMax;
@@ -766,6 +811,8 @@ document.getElementById('btnSave').onclick = ()=>{
   cfg.tpUsd = Math.max(0.1, +document.getElementById('tpUsd').value||1);
   cfg.slUsd = Math.max(0.1, +document.getElementById('slUsd').value||4);
   cfg.scalp = +document.getElementById('scalp').value;
+  cfg.scSlMode = document.getElementById('scSlMode').value;
+  cfg.scAtrRR = +document.getElementById('scAtrRR').value || 1.5;
   cfg.scTp = Math.max(0.1, +document.getElementById('scTp').value||2);
   cfg.scSl = Math.max(0.1, +document.getElementById('scSl').value||5);
   cfg.scMax = Math.max(1, +document.getElementById('scMax').value||3);
@@ -777,6 +824,7 @@ document.getElementById('btnSave').onclick = ()=>{
   store.set('sd_rr',cfg.rr);
   store.set('sd_slmode',cfg.slMode); store.set('sd_tpusd',cfg.tpUsd); store.set('sd_slusd',cfg.slUsd);
   store.set('sd_scalp',cfg.scalp); store.set('sd_sctp',cfg.scTp); store.set('sd_scsl',cfg.scSl); store.set('sd_scmax',cfg.scMax);
+  store.set('sd_scslmode',cfg.scSlMode); store.set('sd_scatrrr',cfg.scAtrRR);
   store.set('sd_alerts',cfg.alerts);
   closeSettings();
   schedule();
