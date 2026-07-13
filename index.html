@@ -486,6 +486,18 @@ function usdToDist(sym, px, usd){
   return sym.includes('XAU') ? usd : sym.startsWith('USD/') ? usd*px/1000 : usd/1000;
 }
 function monthKey(){ return new Date().toISOString().slice(0,7); }
+function migrateStats(){
+  const stats = store.get('sd_stats',{});
+  const mk = monthKey();
+  // old format: stats[mk] = {w,l}. New format: stats[mk+'|fixed'], stats[mk+'|atr']
+  if(stats[mk] && !stats[mk+'|fixed'] && !store.get('sd_stats_migrated',false)){
+    stats[mk+'|fixed'] = { w: stats[mk].w||0, l: stats[mk].l||0 };
+    delete stats[mk];
+    store.set('sd_stats', stats);
+  }
+  store.set('sd_stats_migrated', true);
+}
+migrateStats();
 function fmt12(x){ // "2026-07-10 07:00:00" or Date -> "10 Jul, 7:00 AM"
   const d = (x instanceof Date) ? x : new Date(String(x).replace(' ','T'));
   if(isNaN(d)) return String(x);
