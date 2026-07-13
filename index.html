@@ -63,9 +63,9 @@ main{padding:14px 12px;display:grid;gap:10px;grid-template-columns:1fr;max-width
 .lvls b{font-size:12.5px;font-weight:700;font-variant-numeric:tabular-nums}
 /* ---------- tabs ---------- */
 .tabs{display:flex;gap:8px;padding:12px 12px 0;max-width:680px;margin:0 auto}
-.tab{flex:1;text-align:center;padding:9px;border-radius:8px;border:1px solid var(--line);
-  background:var(--surface);color:var(--muted);font-family:var(--mono);font-size:12px;font-weight:700;
-  letter-spacing:.8px;cursor:pointer}
+.tab{flex:1;text-align:center;padding:9px 4px;border-radius:8px;border:1px solid var(--line);
+  background:var(--surface);color:var(--muted);font-family:var(--mono);font-size:11px;font-weight:700;
+  letter-spacing:.5px;cursor:pointer}
 .tab.on{background:var(--gold);color:#14161C;border-color:var(--gold)}
 /* ---------- scalp ---------- */
 .statshead{max-width:680px;margin:12px auto 0;padding:10px 14px;background:var(--surface);
@@ -126,6 +126,7 @@ footer{max-width:680px;margin:18px auto 0;padding:0 16px;font-size:9.5px;color:v
 <div class="tabs">
   <button class="tab on" id="tabTrend">TREND</button>
   <button class="tab" id="tabScalp">SCALP</button>
+  <button class="tab" id="tabHist">HISTORY</button>
 </div>
 
 <main id="grid"></main>
@@ -133,6 +134,11 @@ footer{max-width:680px;margin:18px auto 0;padding:0 16px;font-size:9.5px;color:v
 <div id="scalpPane" style="display:none">
   <div class="statshead" id="scalpStats"></div>
   <main id="scalpGrid" style="padding-top:10px"></main>
+</div>
+
+<div id="histPane" style="display:none">
+  <div class="statshead" id="histStats"></div>
+  <main id="histGrid" style="padding-top:10px"></main>
 </div>
 
 <div class="setup" id="setup" hidden>
@@ -491,7 +497,7 @@ function addResult(sym, dir, res){ // res: 'W'|'L'|'EXP'
   }
   const hist = store.get('sd_hist',[]);
   hist.unshift({sym, dir, res, ts:fmt12(new Date())});
-  store.set('sd_hist', hist.slice(0,20));
+  store.set('sd_hist', hist.slice(0,150));
 }
 function replaySignal(sig, bars){
   // returns 'W','L','EXP','TRIG', or null (still open). Mutates sig.state on trigger.
@@ -582,19 +588,49 @@ function renderScalp(){
       <div class="meta"><span>Created <b>${fmt12(s.created)}</b></span><span>Today <b>${(dc.counts&&dc.counts[sym])||0}/${cfg.scMax}</b></span></div>`;
     sg.appendChild(el);
   }
-  const hist = store.get('sd_hist',[]);
-  const hEl=document.createElement('div');
-  hEl.className='card';
-  hEl.innerHTML = '<div class="pair" style="font-size:13px">HISTORY</div><div class="sighist">'+
-    (hist.length? hist.map(h=>`<div><span class="${h.res==='W'?'w':h.res==='L'?'l':''}">${h.res==='W'?'✅':h.res==='L'?'❌':'⏸'}</span> ${h.sym} ${h.dir===1?'BUY':'SELL'} · ${h.ts}</div>`).join('') : 'Abhi koi result nahi — signals aane do.')+
-    '</div>';
-  sg.appendChild(hEl);
   if(!any){
     const e=document.createElement('div');
     e.className='card';
     e.innerHTML='<div class="meta">Koi open signal nahi. M15 flip pe naya signal banega (max '+cfg.scMax+'/pair/day).</div>';
     sg.insertBefore(e, sg.firstChild);
   }
+}
+function renderHistory(){
+  const hist = store.get('sd_hist',[]);
+  const stats = store.get('sd_stats',{})[monthKey()] || {w:0,l:0};
+  const tot = stats.w+stats.l;
+  const pct = tot? Math.round(100*stats.w/tot) : 0;
+  document.getElementById('histStats').innerHTML =
+    `<span>This month: <b>${stats.w}W / ${stats.l}L</b></span><span>Win rate: <b>${pct}%</b></span><span>Total logged: <b>${hist.length}</b></span>`;
+
+  // per-pair breakdown (this month, W/L only)
+  const byPair={};
+  for(const h of hist){
+    if(h.res==='EXP') continue;
+    if(!h.ts) continue;
+    byPair[h.sym] = byPair[h.sym] || {w:0,l:0};
+    if(h.res==='W') byPair[h.sym].w++; else byPair[h.sym].l++;
+  }
+  const hg = document.getElementById('histGrid');
+  hg.innerHTML='';
+  const pairs = Object.keys(byPair);
+  if(pairs.length){
+    const bd=document.createElement('div');
+    bd.className='card';
+    bd.innerHTML = '<div class="pair" style="font-size:13px;margin-bottom:8px">PER-PAIR BREAKDOWN</div>'+
+      pairs.map(p=>{
+        const s=byPair[p]; const t=s.w+s.l; const pc=t?Math.round(100*s.w/t):0;
+        return `<div class="meta" style="margin-top:4px"><span style="min-width:80px;display:inline-block;color:var(--text)">${p}</span><span>${s.w}W/${s.l}L</span><span><b style="color:${pc>=60?'var(--buy)':pc>=40?'var(--gold)':'var(--sell)'}">${pc}%</b></span></div>`;
+      }).join('');
+    hg.appendChild(bd);
+  }
+
+  const listCard=document.createElement('div');
+  listCard.className='card';
+  listCard.innerHTML = '<div class="pair" style="font-size:13px;margin-bottom:6px">ALL SIGNALS</div><div class="sighist">'+
+    (hist.length? hist.map(h=>`<div><span class="${h.res==='W'?'w':h.res==='L'?'l':''}">${h.res==='W'?'✅':h.res==='L'?'❌':'⏸'}</span> ${h.sym} ${h.dir===1?'BUY':'SELL'} · ${h.ts}</div>`).join('') : 'Abhi koi result nahi.')+
+    '</div>';
+  hg.appendChild(listCard);
 }
 
 /* ================= scan ================= */
@@ -665,10 +701,18 @@ function schedule(){
 }
 
 /* ================= tabs ================= */
-const tabTrend=document.getElementById('tabTrend'), tabScalp=document.getElementById('tabScalp');
-const scalpPane=document.getElementById('scalpPane');
-tabTrend.onclick=()=>{ tabTrend.classList.add('on'); tabScalp.classList.remove('on'); grid.style.display='grid'; scalpPane.style.display='none'; };
-tabScalp.onclick=()=>{ tabScalp.classList.add('on'); tabTrend.classList.remove('on'); grid.style.display='none'; scalpPane.style.display='block'; renderScalp(); };
+const tabTrend=document.getElementById('tabTrend'), tabScalp=document.getElementById('tabScalp'), tabHist=document.getElementById('tabHist');
+const scalpPane=document.getElementById('scalpPane'), histPane=document.getElementById('histPane');
+function showTab(which){
+  [tabTrend,tabScalp,tabHist].forEach(t=>t.classList.remove('on'));
+  grid.style.display='none'; scalpPane.style.display='none'; histPane.style.display='none';
+  if(which==='trend'){ tabTrend.classList.add('on'); grid.style.display='grid'; }
+  if(which==='scalp'){ tabScalp.classList.add('on'); scalpPane.style.display='block'; renderScalp(); }
+  if(which==='hist'){ tabHist.classList.add('on'); histPane.style.display='block'; renderHistory(); }
+}
+tabTrend.onclick=()=>showTab('trend');
+tabScalp.onclick=()=>showTab('scalp');
+tabHist.onclick=()=>showTab('hist');
 
 /* ================= settings ui ================= */
 const overlay = document.getElementById('overlay');
