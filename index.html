@@ -249,6 +249,9 @@ footer{max-width:680px;margin:18px auto 0;padding:0 16px;font-size:9.5px;color:v
     </div>
     <input type="file" id="restoreFile" accept="application/json" style="display:none">
 
+    <button class="btn ghost" id="btnReset" style="margin-top:10px;width:100%;border-color:var(--sell);color:var(--sell)">&#128465; Reset history &amp; stats (fresh start)</button>
+    <div class="hint">Sirf history/stats/open-signals clear honge — API key, pairs, saari settings safe rahengi. Backup pehle le lena agar purana data future mein chahiye.</div>
+
     <div class="sheetbtns">
       <button class="btn ghost" id="btnClose">Cancel</button>
       <button class="btn" id="btnSave">Save &amp; scan</button>
@@ -504,6 +507,23 @@ function migrateStats(){
     store.set('sd_stats', stats);
   }
   store.set('sd_stats_migrated', true);
+
+  // old open-signal keys were just "sym" -> migrate to "sym|mode"
+  if(!store.get('sd_sigs_migrated',false)){
+    const sigs = store.get('sd_sigs',{});
+    const fixed = {};
+    for(const k in sigs){
+      if(k.indexOf('|')===-1){
+        const sig = sigs[k];
+        const mode = sig.mode || 'fixed';
+        fixed[k+'|'+mode] = {...sig, mode};
+      } else {
+        fixed[k] = sigs[k];
+      }
+    }
+    store.set('sd_sigs', fixed);
+    store.set('sd_sigs_migrated', true);
+  }
 }
 migrateStats();
 function fmt12(x){ // "2026-07-10 07:00:00" or Date -> "10 Jul, 7:00 AM"
@@ -567,23 +587,24 @@ function processScalp(sym, bars){
   let dc = store.get('sd_daycount',{ymd:'',counts:{}});
   if(dc.ymd!==ymd) dc={ymd, counts:{}};
 
-  //--- open signal: backfill check from candle history
-  let sig = sigs[sym];
-  if(sig){
+  //--- check/backfill ALL open signals for this symbol (any mode)
+  for(const key of Object.keys(sigs)){
+    if(!key.startsWith(sym+'|')) continue;
+    const sig = sigs[key];
     const ev = replaySignal(sig, bars);
-    const tpTxt = sig.mode==='atr' ? '(ATR)' : '+$'+cfg.scTp;
-    const slTxt = sig.mode==='atr' ? '(ATR)' : '-$'+cfg.scSl;
-    if(ev==='W'){ addResult(sym,sig.dir,'W',sig.mode); scalpAlert('✅ '+sym+' TP HIT '+tpTxt+' ['+sig.mode.toUpperCase()+']'); delete sigs[sym]; }
-    else if(ev==='L'){ addResult(sym,sig.dir,'L',sig.mode); scalpAlert('❌ '+sym+' SL HIT '+slTxt+' ['+sig.mode.toUpperCase()+']'); delete sigs[sym]; }
-    else if(ev==='EXP'){ addResult(sym,sig.dir,'EXP',sig.mode); delete sigs[sym]; }
-    else if(ev==='TRIG'){ scalpAlert('▶️ '+sym+' TRIGGERED ['+sig.mode.toUpperCase()+']'); sigs[sym]=sig; }
-    else sigs[sym]=sig;
+    const modeTag = '['+sig.mode.toUpperCase()+']';
+    if(ev==='W'){ addResult(sym,sig.dir,'W',sig.mode); scalpAlert('✅ '+sym+' TP HIT '+modeTag); delete sigs[key]; }
+    else if(ev==='L'){ addResult(sym,sig.dir,'L',sig.mode); scalpAlert('❌ '+sym+' SL HIT '+modeTag); delete sigs[key]; }
+    else if(ev==='EXP'){ addResult(sym,sig.dir,'EXP',sig.mode); delete sigs[key]; }
+    else if(ev==='TRIG'){ scalpAlert('▶️ '+sym+' TRIGGERED '+modeTag); sigs[key]=sig; }
+    else sigs[key]=sig;
   }
 
-  //--- new signal on M15 flip
-  if(prev!==undefined && st.dir!==prev && !sigs[sym] && (dc.counts[sym]||0) < +cfg.scMax){
+  //--- new signal on M15 flip (current mode only; doesn't block other mode's signal on same pair)
+  const mode = cfg.scSlMode; // 'fixed' or 'atr'
+  const skey = sym+'|'+mode;
+  if(prev!==undefined && st.dir!==prev && !sigs[skey] && (dc.counts[skey]||0) < +cfg.scMax){
     const px = bars[bars.length-1].c;
-    const mode = cfg.scSlMode; // 'fixed' or 'atr'
     const entry = st.dir===1 ? px + usdToDist(sym,px,+cfg.scBuf) : px - usdToDist(sym,px,+cfg.scBuf);
     let tp, sl;
     if(mode==='atr' && st.atr>0){
@@ -597,8 +618,8 @@ function processScalp(sym, bars){
       tp = st.dir===1 ? entry + tpD : entry - tpD;
       sl = st.dir===1 ? entry - slD : entry + slD;
     }
-    sigs[sym] = {dir:st.dir, state:1, entry, tp, sl, created:bars[bars.length-1].t, mode};
-    dc.counts[sym]=(dc.counts[sym]||0)+1;
+    sigs[skey] = {dir:st.dir, state:1, entry, tp, sl, created:bars[bars.length-1].t, mode};
+    dc.counts[skey]=(dc.counts[skey]||0)+1;
     scalpAlert((st.dir===1?'🟢 BUY STOP ':'🔴 SELL STOP ')+sym+' @ '+fmt(entry,sym)+' ['+mode.toUpperCase()+']');
   }
   scDirs[sym]=st.dir;
@@ -616,32 +637,35 @@ function renderScalp(){
   const dc = store.get('sd_daycount',{counts:{}});
   let any=false;
   for(const sym of cfg.pairs){
-    const s = sigs[sym];
-    if(!s) continue;
-    any=true;
-    const isBuy = s.dir===1;
-    const el=document.createElement('div');
-    el.className='card '+(isBuy?'buy':'sell');
-    const slLbl = s.mode==='atr' ? 'SL (ATR)' : `SL ($${cfg.scSl})`;
-    const tpLbl = s.mode==='atr' ? 'TP (ATR)' : `TP ($${cfg.scTp})`;
-    el.innerHTML = `
-      <div class="rowtop">
-        <div class="pair">${sym}</div>
-        <span class="badge ${s.state===1?'pend':'act'}">${s.state===1?'PENDING':'ACTIVE'}</span>
-        <div class="sig ${isBuy?'buy':'sell'}">${isBuy?'&#9650; BUY STOP':'&#9660; SELL STOP'}</div>
-      </div>
-      <div class="lvls">
-        <div><span>ENTRY</span><b>${fmt(s.entry,sym)}</b></div>
-        <div><span>${slLbl}</span><b style="color:var(--sell)">${fmt(s.sl,sym)}</b></div>
-        <div><span>${tpLbl}</span><b style="color:var(--buy)">${fmt(s.tp,sym)}</b></div>
-      </div>
-      <div class="meta"><span>Mode <b>${(s.mode||'fixed').toUpperCase()}</b></span><span>Created <b>${fmt12(s.created)}</b></span><span>Today <b>${(dc.counts&&dc.counts[sym])||0}/${cfg.scMax}</b></span></div>`;
-    sg.appendChild(el);
+    for(const mode of ['fixed','atr']){
+      const skey = sym+'|'+mode;
+      const s = sigs[skey];
+      if(!s) continue;
+      any=true;
+      const isBuy = s.dir===1;
+      const el=document.createElement('div');
+      el.className='card '+(isBuy?'buy':'sell');
+      const slLbl = mode==='atr' ? 'SL (ATR)' : `SL ($${cfg.scSl})`;
+      const tpLbl = mode==='atr' ? 'TP (ATR)' : `TP ($${cfg.scTp})`;
+      el.innerHTML = `
+        <div class="rowtop">
+          <div class="pair">${sym}</div>
+          <span class="badge ${s.state===1?'pend':'act'}">${s.state===1?'PENDING':'ACTIVE'}</span>
+          <div class="sig ${isBuy?'buy':'sell'}">${isBuy?'&#9650; BUY STOP':'&#9660; SELL STOP'}</div>
+        </div>
+        <div class="lvls">
+          <div><span>ENTRY</span><b>${fmt(s.entry,sym)}</b></div>
+          <div><span>${slLbl}</span><b style="color:var(--sell)">${fmt(s.sl,sym)}</b></div>
+          <div><span>${tpLbl}</span><b style="color:var(--buy)">${fmt(s.tp,sym)}</b></div>
+        </div>
+        <div class="meta"><span>Mode <b>${mode.toUpperCase()}</b></span><span>Created <b>${fmt12(s.created)}</b></span><span>Today <b>${(dc.counts&&dc.counts[skey])||0}/${cfg.scMax}</b></span></div>`;
+      sg.appendChild(el);
+    }
   }
   if(!any){
     const e=document.createElement('div');
     e.className='card';
-    e.innerHTML='<div class="meta">Koi open signal nahi. M15 flip pe naya signal banega (max '+cfg.scMax+'/pair/day).</div>';
+    e.innerHTML='<div class="meta">Koi open signal nahi. M15 flip pe naya signal banega (max '+cfg.scMax+'/pair/day, dono modes independent).</div>';
     sg.insertBefore(e, sg.firstChild);
   }
 }
@@ -842,6 +866,14 @@ document.getElementById('restoreFile').onchange = (e)=>{
     }catch(err){ alert('Backup file padh nahi paya — sahi .json file chuno.'); }
   };
   reader.readAsText(file);
+};
+
+document.getElementById('btnReset').onclick = ()=>{
+  if(!confirm('Pakka history/stats/open-signals clear karne hain? Ye undo nahi hoga (backup ho toh restore kar sakte ho). API key aur settings safe rahengi.')) return;
+  const resetKeys = ['sd_hist','sd_stats','sd_sigs','sd_scdirs','sd_daycount','sd_dirs','sd_stats_migrated','sd_sigs_migrated'];
+  resetKeys.forEach(k=> localStorage.removeItem(k));
+  alert('Fresh start! App reload ho raha hai...');
+  location.reload();
 };
 function fireAlertTest(){
   beep();
