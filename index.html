@@ -184,18 +184,7 @@ footer{max-width:680px;margin:18px auto 0;padding:0 16px;font-size:9.5px;color:v
     <input id="atrP" type="number" value="10" min="2" max="50">
     <label for="atrM">Supertrend — Multiplier</label>
     <input id="atrM" type="number" value="3" min="0.5" max="10" step="0.1">
-
-    <label for="slMode">SL/TP mode</label>
-    <select id="slMode">
-      <option value="st" selected>Auto — SL Supertrend line pe, TP ratio se</option>
-      <option value="fixed">Fixed $ — TP/SL dollar mein (0.01 lot ke hisaab se)</option>
-    </select>
-
-    <label for="tpUsd">TP ($ per 0.01 lot) — fixed mode</label>
-    <input id="tpUsd" type="number" value="1" min="0.1" step="0.1">
-    <label for="slUsd">SL ($ per 0.01 lot) — fixed mode</label>
-    <input id="slUsd" type="number" value="4" min="0.1" step="0.1">
-    <div class="hint">Gold: $1 = 1.00 price move. Forex: $1 &asymp; 10 pips. <b style="color:var(--gold)">Dhyan:</b> $1 TP / $4 SL mein break-even ke liye 80%+ win rate chahiye, aur H1 gold ki hourly range $8-15 hoti hai — $4 SL noise mein hit ho sakta hai. Ye style M15 pe better suit karta hai.</div>
+    <div class="hint">TREND tab sirf tab signal dikhata hai jab trend STRONG ho aur EMA200 se CONFIRMED ho — baaki pairs WAITING mein rehte hain. Entry ek pullback-style limit order hai (Buy Limit/Sell Limit), SL Supertrend line pe.</div>
 
     <label for="rr">TP size (SL distance ke multiple mein) — auto mode</label>
     <select id="rr">
@@ -275,9 +264,6 @@ let cfg = {
   atrP: store.get('sd_atrp',10),
   atrM: store.get('sd_atrm',3),
   rr: store.get('sd_rr',1.5),
-  slMode: store.get('sd_slmode','st'),
-  tpUsd: store.get('sd_tpusd',1),
-  slUsd: store.get('sd_slusd',4),
   scalp: store.get('sd_scalp',1),
   scTp: store.get('sd_sctp',2),
   scSl: store.get('sd_scsl',5),
@@ -422,69 +408,76 @@ function renderCard(sym, res, err){
     return el;
   }
   const isBuy = res.dir===1;
-  el.className = 'card ' + (isBuy?'buy':'sell');
   const fresh = res.flipAgo <= 1;
 
-  /* ---- levels ---- */
-  const entry = res.close;
-  let sl, tp, tpLabel;
-  const stRisk = Math.abs(entry - res.line);
-  if(cfg.slMode==='fixed'){
-    // $ → price distance for 0.01 lot: XAU 1oz → $X = X price; XXX/USD 1000 units → X/1000; USD/XXX → X*price/1000
-    const d = usd => sym.includes('XAU') ? usd : sym.startsWith('USD/') ? usd*entry/1000 : usd/1000;
-    sl = isBuy ? entry - d(+cfg.slUsd) : entry + d(+cfg.slUsd);
-    tp = isBuy ? entry + d(+cfg.tpUsd) : entry - d(+cfg.tpUsd);
-    tpLabel = `TP ($${cfg.tpUsd})`;
-  } else {
-    sl = res.line;                           // Supertrend line = logical stop
-    const rr = +cfg.rr || 1.5;
-    tp = isBuy ? entry + stRisk*rr : entry - stRisk*rr;
-    tpLabel = `TP (${rr}&times;)`;
-  }
-
   /* ---- trend strength (dist in ATR units) ---- */
+  const stRisk = Math.abs(res.close - res.line);
   const s = res.atr>0 ? stRisk/res.atr : 0;
+  const isStrong = s>=2.2;
   let trendTxt, trendCol;
-  if(s>=2.2){ trendTxt = isBuy?'STRONG BULLISH':'STRONG BEARISH'; trendCol = isBuy?'var(--buy)':'var(--sell)'; }
+  if(isStrong){ trendTxt = isBuy?'STRONG BULLISH':'STRONG BEARISH'; trendCol = isBuy?'var(--buy)':'var(--sell)'; }
   else if(s>=1.0){ trendTxt = isBuy?'BULLISH':'BEARISH'; trendCol = isBuy?'var(--buy)':'var(--sell)'; }
   else { trendTxt='WEAK / CHOPPY'; trendCol='var(--gold)'; }
 
-  /* ---- volatility risk (ATR vs 50-bar avg) ---- */
+  /* ---- EMA200 confirmation ---- */
+  const hasEma = res.ema != null;
+  const aligned = hasEma ? (isBuy ? res.close > res.ema : res.close < res.ema) : null;
+
+  const confirmed = isStrong && aligned===true;
+
+  /* ---- WAITING card (criteria not met) ---- */
+  if(!confirmed){
+    el.className = 'card';
+    el.style.opacity = '0.6';
+    let reason = !isStrong ? 'Trend abhi strong nahi' : (hasEma ? 'EMA200 se against' : 'EMA data nahi mila');
+    el.innerHTML = `
+      <div class="rowtop">
+        <div class="pair">${sym}</div>
+        <span class="badge" style="background:var(--surface2);color:var(--muted);border:1px solid var(--line)">WAITING</span>
+        <div class="sig" style="color:${trendCol}">${isBuy?'&#9650;':'&#9660;'} ${trendTxt}</div>
+      </div>
+      <div class="meta" style="margin-top:8px"><span>${reason}</span>${hasEma?`<span>EMA200 <b style="color:${aligned?'var(--buy)':'var(--sell)'}">${aligned?'aligned':'against'}</b></span>`:''}</div>`;
+    return el;
+  }
+
+  /* ---- CONFIRMED — pullback limit entry ---- */
+  el.className = 'card ' + (isBuy?'buy':'sell');
+  const pullback = stRisk * 0.382;                         // fib-style retracement
+  const entry = isBuy ? res.close - pullback : res.close + pullback;
+  const sl = res.line;
+  const riskDist = Math.abs(entry - sl);
+  const rr = +cfg.rr || 1.5;
+  const tp = isBuy ? entry + riskDist*rr : entry - riskDist*rr;
+
+  /* ---- volatility risk ---- */
   const vr = res.avgAtr>0 ? res.atr/res.avgAtr : 1;
   const volTxt = vr>1.25 ? 'HIGH' : vr>0.95 ? 'MEDIUM' : 'LOW';
   const volCol = vr>1.25 ? 'var(--sell)' : vr>0.95 ? 'var(--gold)' : 'var(--buy)';
 
-  /* ---- EMA200 confirmation ---- */
-  const hasEma = res.ema != null;
-  const aligned = hasEma ? (isBuy ? entry > res.ema : entry < res.ema) : null;
-
-  /* ---- signal score (indicator-based, NOT win-rate) ---- */
+  /* ---- score ---- */
   let score = 50 + Math.min(28, s*13);
-  if(res.flipAgo>=3 && res.flipAgo<=40) score += 8;       // established trend, not brand-new whipsaw
-  if(vr>1.25) score -= 6;                                  // volatile = uncertain
-  if(aligned===true) score += 7;                           // Supertrend + EMA200 agree
-  if(aligned===false) score -= 10;                         // counter-trend vs EMA200
-  score = Math.round(Math.max(45, Math.min(95, score)));
-
-  /* ---- recommended risk ---- */
+  if(res.flipAgo>=3 && res.flipAgo<=40) score += 8;
+  if(vr>1.25) score -= 6;
+  score += 7; // EMA confirmed bonus (always true here since confirmed gate)
+  score = Math.round(Math.max(50, Math.min(95, score)));
   const recRisk = (score>=78 && vr<=1.25) ? '1%' : score>=65 ? '0.5%' : '0.25%';
 
   el.innerHTML = `
     <div class="rowtop">
       <div class="pair">${sym}</div>
       ${fresh?'<span class="newbadge">NEW FLIP</span>':''}
-      <div class="sig ${isBuy?'buy':'sell'}">${isBuy?'&#9650; BUY':'&#9660; SELL'}</div>
+      <div class="sig ${isBuy?'buy':'sell'}">${isBuy?'&#9650; BUY LIMIT':'&#9660; SELL LIMIT'}</div>
     </div>
-    <div class="price">${fmt(entry,sym)}</div>
+    <div class="price">${fmt(res.close,sym)}</div>
     <div class="lvls">
-      <div><span>ENTRY</span><b>${fmt(entry,sym)}</b></div>
-      <div><span>SL${cfg.slMode==='fixed'?` ($${cfg.slUsd})`:''}</span><b style="color:var(--sell)">${fmt(sl,sym)}</b></div>
-      <div><span>${tpLabel}</span><b style="color:var(--buy)">${fmt(tp,sym)}</b></div>
+      <div><span>ENTRY (limit)</span><b>${fmt(entry,sym)}</b></div>
+      <div><span>SL</span><b style="color:var(--sell)">${fmt(sl,sym)}</b></div>
+      <div><span>TP (${rr}&times;)</span><b style="color:var(--buy)">${fmt(tp,sym)}</b></div>
     </div>
     <div class="meta">
       <span>Score <b>${score}%</b></span>
       <span>Trend <b style="color:${trendCol}">${trendTxt}</b></span>
-      ${hasEma ? `<span>EMA200 <b style="color:${aligned?'var(--buy)':'var(--sell)'}">${aligned?'&#10003; CONFIRMED':'&#10007; AGAINST'}</b></span>` : ''}
+      <span>EMA200 <b style="color:var(--buy)">&#10003; CONFIRMED</b></span>
       <span>Vol risk <b style="color:${volCol}">${volTxt}</b></span>
       <span>Risk <b>${recRisk}</b></span>
       <span>Flip <b>${res.flipAgo} bar${res.flipAgo===1?'':'s'}</b></span>
@@ -811,9 +804,6 @@ function openSettings(){
   document.getElementById('atrP').value = cfg.atrP;
   document.getElementById('atrM').value = cfg.atrM;
   document.getElementById('rr').value = String(cfg.rr);
-  document.getElementById('slMode').value = cfg.slMode;
-  document.getElementById('tpUsd').value = cfg.tpUsd;
-  document.getElementById('slUsd').value = cfg.slUsd;
   document.getElementById('scalp').value = String(+cfg.scalp);
   document.getElementById('scSlMode').value = cfg.scSlMode;
   document.getElementById('scAtrRR').value = String(cfg.scAtrRR);
@@ -891,9 +881,6 @@ document.getElementById('btnSave').onclick = ()=>{
   cfg.atrP = Math.max(2, +document.getElementById('atrP').value||10);
   cfg.atrM = Math.max(0.5, +document.getElementById('atrM').value||3);
   cfg.rr = +document.getElementById('rr').value || 1.5;
-  cfg.slMode = document.getElementById('slMode').value;
-  cfg.tpUsd = Math.max(0.1, +document.getElementById('tpUsd').value||1);
-  cfg.slUsd = Math.max(0.1, +document.getElementById('slUsd').value||4);
   cfg.scalp = +document.getElementById('scalp').value;
   cfg.scSlMode = document.getElementById('scSlMode').value;
   cfg.scAtrRR = +document.getElementById('scAtrRR').value || 1.5;
@@ -906,7 +893,6 @@ document.getElementById('btnSave').onclick = ()=>{
   store.set('sd_interval',cfg.interval); store.set('sd_refresh',cfg.refresh);
   store.set('sd_atrp',cfg.atrP); store.set('sd_atrm',cfg.atrM);
   store.set('sd_rr',cfg.rr);
-  store.set('sd_slmode',cfg.slMode); store.set('sd_tpusd',cfg.tpUsd); store.set('sd_slusd',cfg.slUsd);
   store.set('sd_scalp',cfg.scalp); store.set('sd_sctp',cfg.scTp); store.set('sd_scsl',cfg.scSl); store.set('sd_scmax',cfg.scMax);
   store.set('sd_scslmode',cfg.scSlMode); store.set('sd_scatrrr',cfg.scAtrRR);
   store.set('sd_alerts',cfg.alerts);
